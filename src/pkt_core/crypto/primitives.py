@@ -21,7 +21,7 @@ constant for a given format — see :mod:`pkt_core.crypto.keys`.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Callable, Final
+from typing import TYPE_CHECKING, Callable, Final, NamedTuple
 
 from pkt_core.errors import UnsupportedCipherError
 
@@ -125,26 +125,16 @@ def ctr_crypt(encrypt_block: EncryptBlock, nonce: bytes, data: bytes) -> bytes:
 # --------------------------------------------------------------------------
 # EAX (Crypto++ variant)
 # --------------------------------------------------------------------------
-class EaxResult(tuple):  # type: ignore[type-arg]
+class EaxResult(NamedTuple):
     """``(plaintext, computed_tag, stored_tag)`` from :func:`eax_open`.
 
-    Named accessors keep call sites readable without pulling in ``dataclasses``
-    for what is fundamentally a triple.
+    A named tuple so call sites can use ``result.valid`` / ``result.plaintext``
+    without pulling in ``dataclasses`` for what is fundamentally a triple.
     """
 
-    __slots__ = ()
-
-    @property
-    def plaintext(self) -> bytes:
-        return self[0]
-
-    @property
-    def computed_tag(self) -> bytes:
-        return self[1]
-
-    @property
-    def stored_tag(self) -> bytes:
-        return self[2]
+    plaintext: bytes
+    computed_tag: bytes
+    stored_tag: bytes
 
     @property
     def valid(self) -> bool:
@@ -232,7 +222,11 @@ def eax_open(cipher_name: str, key: bytes, iv: bytes, data: bytes) -> EaxResult:
     body, stored = data[:-BLOCK_SIZE], data[-BLOCK_SIZE:]
     nonce = _nonce_of(encrypt_block, iv, subkeys)
     pt = ctr_crypt(encrypt_block, nonce, body)
-    return EaxResult((pt, _tag_of(encrypt_block, nonce, body, subkeys), stored))
+    return EaxResult(
+        plaintext=pt,
+        computed_tag=_tag_of(encrypt_block, nonce, body, subkeys),
+        stored_tag=stored,
+    )
 
 
 def eax_verify(cipher_name: str, key: bytes, iv: bytes, data: bytes) -> bool:

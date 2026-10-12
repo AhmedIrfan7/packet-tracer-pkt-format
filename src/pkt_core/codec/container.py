@@ -23,7 +23,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable, Sequence
+from typing import Final, Iterable, Sequence
 
 from pkt_core.codec.qcompress import qcompress, quncompress
 from pkt_core.crypto.keys import FORMATS, FormatName, FormatSpec, get_format
@@ -94,32 +94,74 @@ def root_tag(xml: bytes) -> str:
 # --------------------------------------------------------------------------
 # Detection
 # --------------------------------------------------------------------------
+#: zlib stream signatures that can follow a qCompress length prefix.
+_ZLIB_MAGICS: Final[tuple[bytes, ...]] = (
+    b"\x78\x01",
+    b"\x78\x5e",
+    b"\x78\x9c",
+    b"\x78\xda",
+)
+
+
+def _looks_like_legacy(raw: bytes) -> bool:
+    """Cheap structural probe for the unencrypted PT 5.x family.
+
+    Family L is ``layer_b -> qCompress -> zlib``, so deobfuscating yields a
+    4-byte big-endian uncompressed length followed by a zlib stream. Two checks
+    gate it: a plausible length and a real zlib magic. The length is then
+    verified exactly during inflate, which is what actually proves it.
+    """
+    if len(raw) < 6:
+        return False
+    payload = layer_b(raw)
+    declared = int.from_bytes(payload[:4], "big")
+    if declared == 0 or declared > _MAX_LEGACY_PLAUSIBLE:
+        return False
+    return payload[4:6] in _ZLIB_MAGICS
+
+
+#: Guard against absurd allocations from a corrupt probe.
+_MAX_LEGACY_PLAUSIBLE: Final[int] = 1 << 31
+
+
 def detect_format(
     raw: bytes,
     candidates: Sequence[FormatName] | None = None,
 ) -> FormatName:
-    """Identify the container flavour by AEAD tag verification.
+    """Identify the container family and flavour.
+
+    There is no magic header, so detection is *verifier-based*:
+
+    1. Try every modern flavour and accept the first whose **EAX tag verifies**
+       (false-positive rate 2^-128).
+    2. Otherwise, if the bytes deobfuscate into a valid qCompress payload,
+       classify as the **legacy** PT 5.x family.
 
     Args:
         raw: The complete file bytes.
-        candidates: Formats to try, in order. Defaults to every registered format.
+        candidates: Modern formats to try, in order. Defaults to all of them.
 
     Returns:
-        The name of the first flavour whose tag verifies.
+        The name of the detected flavour.
 
     Raises:
-        TruncatedFileError: if the buffer is too short to hold a tag.
-        FormatError: if no candidate authenticates. For a genuinely *legacy*
-            container this is expected — see ``docs/LEGACY_FORMAT.md``.
+        TruncatedFileError: if the buffer is too short to be a container.
+        FormatError: if nothing matches — the file is corrupt or not a container.
     """
     if len(raw) < 16:
         raise TruncatedFileError(
-            f"file is {len(raw)} bytes; a container needs at least 16 for the EAX tag"
+            f"file is {len(raw)} bytes; a container needs at least 16 bytes"
         )
-    names: Iterable[FormatName] = candidates if candidates is not None else FORMATS.keys()
+    names: Iterable[FormatName] = (
+        candidates
+        if candidates is not None
+        else tuple(n for n, s in FORMATS.items() if not s.is_legacy)
+    )
     tried: list[str] = []
     for name in names:
         spec = get_format(name)
+        if spec.is_legacy:
+            continue
         try:
             result = eax_open(spec.cipher, spec.key, spec.iv, layer_a(raw))
         except PacketTracerError:
@@ -128,10 +170,13 @@ def detect_format(
         if result.valid:
             return name
         tried.append(name)
+
+    if candidates is None and _looks_like_legacy(raw):
+        return "legacy"
+
     raise FormatError(
         f"no known format authenticated this file (tried: {', '.join(tried)}). "
-        "If this is a pre-PT-6 container it uses the legacy transform — see "
-        "docs/LEGACY_FORMAT.md"
+        "See docs/FORMAT_SPECIFICATION.md"
     )
 
 
@@ -169,6 +214,12 @@ def decode_bytes(
         )
     name = fmt if fmt is not None else detect_format(raw)
     spec = get_format(name)
+
+    if spec.is_legacy:
+        # Family L: no AEAD, no byte reversal. layer_b is an involution, so the
+        # same call that deobfuscates on read obfuscates on write.
+        xml = quncompress(layer_b(raw))
+        return Container(xml=xml, format_name=name, spec=spec, raw=raw)
 
     result = eax_open(spec.cipher, spec.key, spec.iv, layer_a(raw))
     if verify_tag and not result.valid:
@@ -211,13 +262,16 @@ def encode_bytes(
         Complete file bytes.
 
     Note:
-        With a fixed key/IV the AEAD is deterministic, so identical XML always
-        produces identical file bytes. zlib's exact compressed stream may vary
-        across zlib builds; container-level round-trip is therefore verified by
-        inflating and re-comparing, not by demanding identical zlib bytes.
+        With a fixed key/IV the modern AEAD is deterministic, so identical XML
+        always produces identical file bytes. zlib's exact compressed stream may
+        vary across zlib builds; container-level round-trip is therefore verified
+        by inflating and re-comparing, not by demanding identical zlib bytes.
     """
     spec = get_format(fmt)
     payload = layer_b(qcompress(xml, level))
+    if spec.is_legacy:
+        # Family L stops here: the deobfuscated qCompress payload *is* the file.
+        return payload
     sealed = eax_seal(spec.cipher, spec.key, spec.iv, payload)
     return layer_a_inverse(sealed)
 

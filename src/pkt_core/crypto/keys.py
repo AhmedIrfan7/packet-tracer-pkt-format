@@ -41,8 +41,9 @@ class FormatSpec:
 
     Attributes:
         cipher: Backend cipher name — see :mod:`pkt_core.crypto.ciphers`.
-        key_byte: Single byte that is repeated 16x to form the key.
-        iv_byte: Single byte that is repeated 16x to form the IV/nonce.
+            ``"none"`` for the legacy family, which is not encrypted at all.
+        key_byte: Single byte that is repeated 16x to form the key (modern family).
+        iv_byte: Single byte that is repeated 16x to form the IV/nonce (modern family).
         description: Human-readable origin, for the format specification.
     """
 
@@ -56,6 +57,11 @@ class FormatSpec:
             raise ValueError(f"key_byte out of range: {self.key_byte!r}")
         if not 0 <= self.iv_byte <= 0xFF:
             raise ValueError(f"iv_byte out of range: {self.iv_byte!r}")
+
+    @property
+    def is_legacy(self) -> bool:
+        """True for the unencrypted PT 5.x family (no AEAD, no byte reversal)."""
+        return self.cipher == "none"
 
     @property
     def key(self) -> bytes:
@@ -118,6 +124,16 @@ FORMATS: Final[Mapping[FormatName, FormatSpec]] = {
         key_byte=0xF1,
         iv_byte=0x1F,
         description="Util::encrypt/decryptUserApp — user applications",
+    ),
+    # --- Family L: the legacy (PT 5.x) container -----------------------------
+    # No AEAD and no byte reversal: the file is just layer-B-obfuscated qCompress.
+    # Recorded here so detection can name what it found. Verified byte-exact on
+    # 193 real PT 5.1 containers. See docs/LEGACY_FORMAT.md.
+    "legacy": FormatSpec(
+        cipher="none",
+        key_byte=0x00,
+        iv_byte=0x00,
+        description="PT 5.x .pkt/.pka — layer B + qCompress only (no AEAD, no reversal)",
     ),
 }
 
