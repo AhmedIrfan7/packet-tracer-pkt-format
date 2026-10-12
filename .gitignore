@@ -22,6 +22,12 @@ htmlcov/
 !corpus/samples/*.pkt
 !corpus/samples/*.pka
 
+# Generated unpack fixtures are committed (regenerate with pkt unpack).
+!tests/fixtures/**/*.xml
+!tests/fixtures/**/*.cfg
+!tests/fixtures/**/*.json
+!tests/fixtures/**/*.dot
+
 # Harvested third-party corpus (bulk) and scratch trees are never committed.
 corpus/internet/
 corpus/_work/
