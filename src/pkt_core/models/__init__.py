@@ -19,6 +19,16 @@ from __future__ import annotations
 from pkt_core.models.base import PktNode, unknown_children
 from pkt_core.models.lab import Cluster, Lab, LabOptions, Network, RunningConfig
 from pkt_core.models.network import Cable, Device, Link, Module, Port, Workspace
+from pkt_core.models.schema import (
+    ActivitySection,
+    CanvasShape,
+    DeviceDetails,
+    EnvironmentOption,
+    FileEntry,
+    PortConfig,
+    ScoringNode,
+    WirelessConfig,
+)
 
 __all__ = [
     "PktNode",
@@ -34,4 +44,12 @@ __all__ = [
     "LabOptions",
     "Network",
     "Lab",
+    "PortConfig",
+    "WirelessConfig",
+    "DeviceDetails",
+    "FileEntry",
+    "ScoringNode",
+    "EnvironmentOption",
+    "CanvasShape",
+    "ActivitySection",
 ]

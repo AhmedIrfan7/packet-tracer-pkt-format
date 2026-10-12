@@ -295,3 +295,161 @@ def test_corpus_devices_and_links_are_found() -> None:
         saw_link += len(lab.links)
     assert saw_device > 0, "no devices found anywhere in the corpus sample"
     assert saw_link > 0, "no links found anywhere in the corpus sample"
+
+
+# --------------------------------------------------------------------------
+# Extended schema families
+# --------------------------------------------------------------------------
+ACTIVITY_DOC = """<PACKETTRACER5_ACTIVITY>
+ <VERSION>9.0.1.0858</VERSION>
+ <PACKETTRACER5>
+  <NETWORK>
+   <DEVICES>
+    <DEVICE>
+     <ENGINE>
+      <TYPE model="PC-PT" customModel="">Pc</TYPE>
+      <NAME translate="true">PC0</NAME>
+      <POWER>true</POWER>
+      <SYS_CONTACT>ops@example.com</SYS_CONTACT>
+      <SYS_LOCATION>Lab 1</SYS_LOCATION>
+      <SERIALNUMBER>FTX1234</SERIALNUMBER>
+      <COORD_SETTINGS><X_COORD>10</X_COORD><Y_COORD>20</Y_COORD><Z_COORD>0</Z_COORD></COORD_SETTINGS>
+      <WIRELESS_CLIENT><SSID>corp</SSID><AUTHEN_TYPE>WPA2-PSK</AUTHEN_TYPE>
+        <ENCRYPT_TYPE>AES</ENCRYPT_TYPE><CURRENT_PROFILE>default</CURRENT_PROFILE>
+      </WIRELESS_CLIENT>
+      <PORT><TYPE>eCopperFastEthernet</TYPE>
+        <IP>192.168.1.10</IP><SUBNET>255.255.255.0</SUBNET>
+        <GATEWAY>192.168.1.1</GATEWAY><DNS>8.8.8.8</DNS>
+        <DHCP_ENABLED>false</DHCP_ENABLED><VLAN>1</VLAN>
+      </PORT>
+      <FILE><FILE_PATH>flash:</FILE_PATH><FILE>config.text</FILE>
+        <FILE_SIZE>128</FILE_SIZE><IS_BOOTABLE>false</IS_BOOTABLE>
+      </FILE>
+     </ENGINE>
+     <WORKSPACE><LOGICAL><X>100</X><Y>200</Y><DEVCLUSTERID>1-1</DEVCLUSTERID>
+       <DEV_ADDR>111</DEV_ADDR></LOGICAL></WORKSPACE>
+    </DEVICE>
+   </DEVICES>
+   <LINKS/>
+  </NETWORK>
+ </PACKETTRACER5>
+ <COMPARISONS>
+  <NODE><ID>Network</ID><NAME>Network</NAME><POINTS>10</POINTS>
+   <COMPONENTS><NODE><ID>PC0</ID><NAME>PC0</NAME><POINTS>5</POINTS></NODE></COMPONENTS>
+  </NODE>
+ </COMPARISONS>
+ <LOCKINGTREE><NODE><ID>Root</ID><NAME>Root</NAME></NODE></LOCKINGTREE>
+ <INSTRUCTIONS>
+  <PAGE><meta charset="windows-1252"><h1>Lab</h1><br><ul><li>step</ul></PAGE>
+ </INSTRUCTIONS>
+ <VARIABLE_MANAGER><VARIABLES_POOLS/></VARIABLE_MANAGER>
+ <ENVIRONMENT_OPTIONS>
+  <ENVIRONMENT_OPTION><CATEGORY>Temperature</CATEGORY><MIN>-100</MIN>
+   <MAX>100</MAX><METRIC_UNIT>C</METRIC_UNIT><IMPERIAL_UNIT>F</IMPERIAL_UNIT>
+   <INTERPOLATE>true</INTERPOLATE><ACTIVE>true</ACTIVE>
+  </ENVIRONMENT_OPTION>
+ </ENVIRONMENT_OPTIONS>
+ <LINES><LINE_LINE><StartX>1</StartX><StartY>2</StartY><EndX>3</EndX><EndY>4</EndY>
+   <Color>#FF0000</Color></LINE_LINE></LINES>
+</PACKETTRACER5_ACTIVITY>"""
+
+
+@pytest.fixture(scope="module")
+def activity() -> Lab:
+    return Lab.from_bytes(ACTIVITY_DOC.encode("utf-8"))
+
+
+def test_activity_network_is_found_inside_nested_document(activity: Lab) -> None:
+    """Scored activities nest the real network; a child-only lookup finds none."""
+    assert activity.is_activity is True
+    assert len(activity.devices) == 1
+    assert activity.devices[0].name == "PC0"
+
+
+def test_device_details_metadata(activity: Lab) -> None:
+    d = activity.devices[0].details
+    assert d is not None
+    assert d.sys_contact == "ops@example.com"
+    assert d.sys_location == "Lab 1"
+    assert d.serial_number == "FTX1234"
+    assert d.coordinates == ("10", "20", "0")
+
+
+def test_port_config_ip_and_dhcp(activity: Lab) -> None:
+    cfgs = activity.devices[0].port_configs
+    assert cfgs, "expected an IP config block on the PC port"
+    cfg = cfgs[0]
+    assert cfg.ip_address == "192.168.1.10"
+    assert cfg.subnet_mask == "255.255.255.0"
+    assert cfg.gateway == "192.168.1.1"
+    assert cfg.dns == "8.8.8.8"
+    assert cfg.dhcp_enabled is False
+    assert cfg.vlan == "1"
+
+
+def test_wireless_config(activity: Lab) -> None:
+    w = activity.devices[0].wireless
+    assert w is not None
+    assert w.ssid == "corp"
+    assert w.auth_type == "WPA2-PSK"
+    assert w.encryption == "AES"
+    assert w.profile == "default"
+
+
+def test_device_files(activity: Lab) -> None:
+    files = activity.devices[0].files
+    assert files
+    assert files[0].name == "config.text"
+    assert files[0].path == "flash:"
+    assert files[0].size == "128"
+    assert files[0].is_bootable is False
+
+
+def test_scoring_tree(activity: Lab) -> None:
+    roots = activity.scoring_tree
+    assert len(roots) == 1
+    assert roots[0].node_id == "Network"
+    assert roots[0].points == "10"
+    kids = roots[0].children
+    assert any(k.node_id == "PC0" for k in kids)
+
+
+def test_activity_sections_are_typed(activity: Lab) -> None:
+    tags = {s.tag for s in activity.activity_sections}
+    assert {"COMPARISONS", "LOCKINGTREE", "INSTRUCTIONS", "VARIABLE_MANAGER"} <= tags
+
+
+def test_instructions_html_is_raw_bytes(activity: Lab) -> None:
+    """Word-exported HTML with void elements must not be decoded or tidied."""
+    section = next(s for s in activity.activity_sections if s.is_instructions)
+    html = section.instructions_html
+    assert isinstance(html, bytes)
+    assert b"<meta" in html and b"<br>" in html and b"<ul>" in html
+
+
+def test_environment_options(activity: Lab) -> None:
+    opts = activity.environment_options
+    assert opts
+    o = opts[0]
+    assert o.category == "Temperature"
+    assert o.minimum == -100.0
+    assert o.maximum == 100.0
+    assert o.metric_unit == "C"
+    assert o.imperial_unit == "F"
+    assert o.interpolate is True
+
+
+def test_canvas_shapes(activity: Lab) -> None:
+    shapes = activity.canvas_shapes
+    assert shapes
+    s = shapes[0]
+    assert s.endpoints == ((1.0, 2.0), (3.0, 4.0))
+    assert s.color == "#FF0000"
+
+
+def test_extended_access_is_lossless(activity: Lab) -> None:
+    for d in activity.devices:
+        _ = d.details, d.port_configs, d.wireless, d.files
+    _ = activity.scoring_tree, activity.activity_sections
+    _ = activity.environment_options, activity.canvas_shapes
+    assert activity.to_xml() == ACTIVITY_DOC.encode("utf-8")

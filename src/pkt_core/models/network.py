@@ -5,6 +5,12 @@ from __future__ import annotations
 from typing import ClassVar
 
 from pkt_core.models.base import PktNode
+from pkt_core.models.schema import (
+    DeviceDetails,
+    FileEntry,
+    PortConfig,
+    WirelessConfig,
+)
 from pkt_core.xml.nodes import XmlElement
 
 __all__ = ["Port", "Module", "Workspace", "Device", "Cable", "Link"]
@@ -232,6 +238,51 @@ class Device(PktNode):
     def cluster_id(self) -> str:
         ws = self.workspace
         return ws.cluster_id if ws is not None else ""
+
+    # -- extended schema families -----------------------------------------
+    @property
+    def details(self) -> DeviceDetails | None:
+        """Inventory metadata: sys contact/location, serial, physical coords."""
+        node = self.engine
+        return DeviceDetails.from_element(node) if node is not None else None
+
+    @property
+    def port_configs(self) -> list[PortConfig]:
+        """IP/DHCP/DNS/VLAN configuration blocks found under this device."""
+        engine = self.engine
+        if engine is None:
+            return []
+        out: list[PortConfig] = []
+        for node in engine.iter_elements():
+            if node.tag in ("PORT_CONFIG", "IP_CONFIG", "SETTINGS", "CONFIG"):
+                out.append(PortConfig.from_element(node))
+            elif node.tag == "PORT" and (
+                node.find("IP") is not None or node.find("IP_ADDRESS") is not None
+            ):
+                out.append(PortConfig.from_element(node))
+        return out
+
+    @property
+    def wireless(self) -> WirelessConfig | None:
+        engine = self.engine
+        if engine is None:
+            return None
+        for node in engine.iter_elements():
+            if node.tag in ("WIRELESS_CLIENT", "WIRELESS_COMMON", "WIRELESS_PROFILE"):
+                return WirelessConfig.from_element(node)
+        return None
+
+    @property
+    def files(self) -> list[FileEntry]:
+        """Entries in the device's simulated filesystem."""
+        engine = self.engine
+        if engine is None:
+            return []
+        out: list[FileEntry] = []
+        for node in engine.iter_elements():
+            if node.tag in ("FILE", "FILE_DATA_ENTRY", "PORT_DATA_ENTRY"):
+                out.append(FileEntry.from_element(node))
+        return out
 
     @property
     def dev_addr(self) -> str:

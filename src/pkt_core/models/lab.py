@@ -8,6 +8,12 @@ from pydantic import PrivateAttr
 
 from pkt_core.models.base import PktNode
 from pkt_core.models.network import Device, Link
+from pkt_core.models.schema import (
+    ActivitySection,
+    CanvasShape,
+    EnvironmentOption,
+    ScoringNode,
+)
 from pkt_core.xml.nodes import XmlDocument, XmlElement
 
 __all__ = ["RunningConfig", "Cluster", "LabOptions", "Network", "Lab"]
@@ -186,7 +192,19 @@ class Lab(PktNode):
 
     @property
     def network(self) -> Network | None:
+        """The ``<NETWORK>`` block.
+
+        Scored activities wrap the actual network in a nested
+        ``<PACKETTRACER5>`` document, so a direct-child lookup is not enough:
+        without descending, an activity reports zero devices. The first
+        ``NETWORK`` found depth-first wins, which is the nested document's.
+        """
         node = self._el.find("NETWORK")
+        if node is None:
+            for desc in self._el.iter_elements():
+                if desc.tag == "NETWORK":
+                    node = desc
+                    break
         return Network.from_element(node) if node is not None else None
 
     @property
@@ -218,6 +236,49 @@ class Lab(PktNode):
     def device_named(self, name: str) -> Device | None:
         net = self.network
         return net.device_named(name) if net is not None else None
+
+    # -- extended schema families -----------------------------------------
+    @property
+    def canvas_shapes(self) -> list[CanvasShape]:
+        """Drawing primitives across LINES / RECTANGLES / ELLIPSES / POLYGONS."""
+        out: list[CanvasShape] = []
+        for tag in ("LINES", "RECTANGLES", "ELLIPSES", "POLYGONS", "GEOVIEW_GRAPHICSITEMS"):
+            node = self._el.find(tag)
+            if node is None:
+                continue
+            out.extend(CanvasShape.from_element(c) for c in node.iter_elements())
+        return out
+
+    @property
+    def environment_options(self) -> list[EnvironmentOption]:
+        """IoT/simulation environment option list.
+
+        Matches only ``ENVIRONMENT_OPTION`` (the item), never the
+        ``ENVIRONMENT_OPTIONS`` container it lives in.
+        """
+        out: list[EnvironmentOption] = []
+        for node in self._el.iter_elements():
+            if node.tag == "ENVIRONMENT_OPTION":
+                out.append(EnvironmentOption.from_element(node))
+        return out
+
+    @property
+    def activity_sections(self) -> list[ActivitySection]:
+        """Named sections of a scored activity (absent in plain labs)."""
+        out: list[ActivitySection] = []
+        for tag in ("COMPARISONS", "INITIALSETUP", "LOCKINGTREE", "INSTRUCTIONS", "VARIABLE_MANAGER"):
+            node = self._el.find(tag)
+            if node is not None:
+                out.append(ActivitySection.from_element(node))
+        return out
+
+    @property
+    def scoring_tree(self) -> list[ScoringNode]:
+        """Root nodes of the activity grading tree, if this is an activity."""
+        for section in self.activity_sections:
+            if section.tag == "COMPARISONS":
+                return section.nodes
+        return []
 
     # -- serialization ----------------------------------------------------
     def to_xml(self) -> bytes:
