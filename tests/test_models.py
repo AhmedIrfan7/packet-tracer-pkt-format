@@ -453,3 +453,74 @@ def test_extended_access_is_lossless(activity: Lab) -> None:
     _ = activity.scoring_tree, activity.activity_sections
     _ = activity.environment_options, activity.canvas_shapes
     assert activity.to_xml() == ACTIVITY_DOC.encode("utf-8")
+
+
+# --------------------------------------------------------------------------
+# Mutation: the setters must write to where the schema actually keeps things
+# --------------------------------------------------------------------------
+MUTABLE = """<PACKETTRACER5>
+ <VERSION>9.0.1.0858</VERSION>
+ <NETWORK>
+  <DEVICES>
+   <DEVICE>
+    <ENGINE>
+     <TYPE model="2811" customModel="">Router</TYPE>
+     <NAME translate="true">Router0</NAME>
+     <POWER>true</POWER>
+    </ENGINE>
+    <WORKSPACE><LOGICAL><X>574.5</X><Y>196</Y><DEVCLUSTERID>1-1</DEVCLUSTERID></LOGICAL></WORKSPACE>
+   </DEVICE>
+  </DEVICES>
+ </NETWORK>
+</PACKETTRACER5>"""
+
+
+def test_set_name_writes_into_engine_not_device() -> None:
+    """The name lives at DEVICE/ENGINE/NAME, not DEVICE/NAME.
+
+    A generic setter would append a second, ignored <NAME> and change nothing.
+    """
+    lab = Lab.from_bytes(MUTABLE.encode("utf-8"))
+    lab.devices[0].set_name("PKT_CORE_RENAMED")
+
+    # the edit must survive a fresh decode
+    again = Lab.from_bytes(lab.to_xml())
+    assert again.device_named("PKT_CORE_RENAMED") is not None
+    assert again.device_named("Router0") is None
+
+    # and must not have created a stray direct-child <NAME>
+    device_el = again.devices[0].element
+    stray = device_el.find("NAME")
+    assert stray is None, "a stray <NAME> was written at the DEVICE level"
+
+
+def test_set_position_updates_workspace_coordinates() -> None:
+    lab = Lab.from_bytes(MUTABLE.encode("utf-8"))
+    assert lab.devices[0].position == (574.5, 196.0)
+
+    lab.devices[0].set_position(123, 456)
+    again = Lab.from_bytes(lab.to_xml())
+    assert again.devices[0].position == (123.0, 456.0)
+
+
+def test_mutation_preserves_everything_else() -> None:
+    """Editing one field must not disturb the rest of the document."""
+    lab = Lab.from_bytes(MUTABLE.encode("utf-8"))
+    lab.devices[0].set_name("RENAMED")
+    lab.devices[0].set_position(1, 2)
+
+    again = Lab.from_bytes(lab.to_xml())
+    dev = again.devices[0]
+    assert dev.kind == "Router"
+    assert dev.model == "2811"
+    assert dev.powered is True
+    assert again.version == "9.0.1.0858"
+    assert again.document.root_tag == "PACKETTRACER5"
+
+
+def test_setters_work_on_a_device_without_workspace() -> None:
+    xml = b'<PACKETTRACER5><NETWORK><DEVICES><DEVICE><ENGINE><NAME>X</NAME></ENGINE></DEVICE></DEVICES></NETWORK></PACKETTRACER5>'
+    lab = Lab.from_bytes(xml)
+    lab.devices[0].set_position(10, 20)
+    again = Lab.from_bytes(lab.to_xml())
+    assert again.devices[0].position == (10.0, 20.0)
