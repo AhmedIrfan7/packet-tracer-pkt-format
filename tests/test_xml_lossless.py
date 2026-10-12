@@ -204,6 +204,7 @@ def _docs() -> list[tuple[str, bytes]]:
     return _DOCS
 
 
+@pytest.mark.corpus
 def test_corpus_documents_parse_and_roundtrip() -> None:
     """Every real document must round-trip byte-exactly through the XML layer.
 
@@ -232,6 +233,7 @@ def test_corpus_documents_parse_and_roundtrip() -> None:
     assert len(docs) >= 1000, f"corpus looks incomplete: {len(docs)} documents"
 
 
+@pytest.mark.corpus
 def test_corpus_roots_are_the_three_known_elements() -> None:
     docs = _docs()
     if not docs:

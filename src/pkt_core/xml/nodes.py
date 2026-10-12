@@ -230,10 +230,16 @@ class XmlDocument:
 # --------------------------------------------------------------------------
 # Parser
 # --------------------------------------------------------------------------
-#: HTML void elements. Packet Tracer activity instructions embed a
-#: Word-exported HTML document, where ``<br>``/``<meta>`` are legal without a
-#: closing tag. Treating them as self-closing keeps the parser out of trouble
-#: without touching the preserved source bytes.
+#: HTML void elements - matched **case-sensitively, lowercase only**.
+#:
+#: Packet Tracer activity instructions embed a Word-exported HTML document in
+#: which ``<br>``/``<meta>`` are legal without a closing tag. That markup is
+#: lowercase.
+#:
+#: The case sensitivity is load-bearing: Packet Tracer's own schema has an
+#: uppercase ``<LINK>`` element (a network cable) which is emphatically *not*
+#: void. Lowercasing the comparison silently turned every cable into a
+#: self-closing tag and dropped all links from the tree.
 _HTML_VOID: frozenset[bytes] = frozenset(
     b"area base br col embed hr img input link meta param source track wbr".split()
 )
@@ -337,7 +343,7 @@ def _parse_element(data: bytes, pos: int) -> tuple[XmlElement, int]:
 
     self_closing = (
         raw_start_tag.rstrip(b">").endswith(b"/")
-        or name.lower() in _HTML_VOID
+        or name in _HTML_VOID  # case-sensitive: PT has an uppercase <LINK>
     )
     attrs = _parse_attrs(raw_start_tag)
 

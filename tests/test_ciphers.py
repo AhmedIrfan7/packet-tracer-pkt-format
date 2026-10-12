@@ -505,6 +505,7 @@ def _ok_corpus_files() -> list[Path]:
     return chosen
 
 
+@pytest.mark.corpus
 def test_container_end_to_end_equivalence() -> None:
     """Real .pkt files decode to byte-identical XML: pure-Python Twofish vs
     pt9.py (libgcrypt Twofish) — the strongest end-to-end proof.

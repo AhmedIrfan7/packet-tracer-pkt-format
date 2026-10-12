@@ -130,6 +130,7 @@ def test_detect_format_rejects_too_short() -> None:
     LEGACY_FILES[:25],
     ids=lambda p: p.name[:48],
 )
+@pytest.mark.corpus
 def test_real_legacy_files_decode(path: Path) -> None:
     raw = path.read_bytes()
     container = decode_bytes(raw)
@@ -143,6 +144,7 @@ def test_real_legacy_files_decode(path: Path) -> None:
 
 
 @pytest.mark.skipif(not LEGACY_FILES, reason="corpus not fetched (see corpus/README.md)")
+@pytest.mark.corpus
 def test_real_legacy_roundtrip_is_byte_exact() -> None:
     """encode(decode(f)) == f across the fetched legacy population."""
     exact = 0
@@ -157,6 +159,7 @@ def test_real_legacy_roundtrip_is_byte_exact() -> None:
 
 
 @pytest.mark.skipif(not LEGACY_FILES, reason="corpus not fetched (see corpus/README.md)")
+@pytest.mark.corpus
 def test_real_legacy_spans_pt_41_to_532() -> None:
     """The legacy family is PT 4.1 .. 5.3.2 — NOT "PT 5.x" and not "pre-PT-6".
 

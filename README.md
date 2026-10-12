@@ -77,14 +77,37 @@ xml = container.xml                    # the inner XML document
 rebuilt = encode_bytes(xml, container.format_name)
 ```
 
+```python
+from pkt_core import decode
+from pkt_core.models import Lab
+
+lab = Lab.from_bytes(decode("lab.pkt").xml)
+for dev in lab.devices:
+    print(dev.name, dev.kind, dev.model, dev.position)
+for link in lab.links:
+    print(link.port_names, link.cable_type)
+```
+
 | Module | Responsibility |
 | --- | --- |
 | `pkt_core.crypto.primitives` | CMAC (RFC 4493), big-endian CTR, and the Crypto++ EAX variant |
 | `pkt_core.crypto.keys` | Per-format key schedule (`twofish`/`serpent128`/`cast256`, key & IV bytes) |
 | `pkt_core.crypto.stream` | The two positional-XOR obfuscation layers |
+| `pkt_core.crypto.ciphers_pure` | Pure-Python Twofish, Serpent and CAST-256 |
 | `pkt_core.codec.qcompress` | Qt `qCompress` framing |
 | `pkt_core.codec.container` | Detect / decode / encode the whole container |
+| `pkt_core.xml` | Lossless byte-level XML layer (lazy, HTML-tolerant) |
+| `pkt_core.models` | Typed views: `Lab`, `Device`, `Port`, `Link`, `Cluster`, `RunningConfig` |
+| `pkt_core.diff` | Semantic device/link/config comparison |
+| `pkt_core.export` | `graphviz`, `netbox`, `containerlab` topology export |
 | `pkt_core.errors` | Typed exceptions — never a bare `Exception` |
+
+The models are **views over the lossless XML tree**, not a parallel data
+structure: writing a document out again emits the original source bytes for
+anything you did not touch, so data loss is impossible by construction.
+Unrecognised elements are surfaced in each model's ``extra_fields`` rather than
+dropped. IOS ``<LINE>`` config is exposed as ``bytes`` on purpose — it carries
+raw ``^C`` banner delimiters that decoding would normalise away.
 
 The AEAD is **deterministic**: key and IV are fixed per format, so the keystream
 is file-independent and identical XML always produces identical bytes. That is

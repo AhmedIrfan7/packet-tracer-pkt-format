@@ -30,9 +30,11 @@ from pkt_core import (
     encode_bytes,
     root_tag,
 )
-from pkt_core.codec.container import detect_format
+from pkt_core.diff import diff_labs
+from pkt_core.export import EXPORTERS, export
+from pkt_core.models import Lab
 
-__all__ = ["main", "cmd_info", "cmd_unpack", "cmd_pack", "cmd_diff"]
+__all__ = ["main", "cmd_info", "cmd_unpack", "cmd_pack", "cmd_diff", "cmd_export"]
 
 _PROG = "pkt"
 
@@ -148,49 +150,68 @@ def cmd_pack(args: argparse.Namespace) -> int:
 # pkt diff
 # --------------------------------------------------------------------------
 def cmd_diff(args: argparse.Namespace) -> int:
-    """Compare two containers.
+    """Compare two containers semantically.
 
-    Compares at two levels: the container identity (format, cipher, root tag,
-    XML size) and the XML text itself. Exit status is 0 when identical, 1 when
-    they differ — so this is script-friendly.
+    Devices and links are matched by name / endpoint identity, so reordering the
+    document is not reported as a change. Exit status is 0 when the two are
+    semantically identical, 1 when they differ — script-friendly.
     """
     a = _load(args.file_a)
     b = _load(args.file_b)
 
-    same = True
     print(f"{'field':<12} {'A':<28} {'B':<28}")
     print("-" * 70)
-    rows = [
+    same_container = True
+    for name, va, vb in (
         ("format", a.format_name, b.format_name),
-        ("cipher", a.spec.cipher, b.spec.cipher),
         ("root tag", a.root_tag, b.root_tag),
-        ("kind", "activity" if a.is_activity else "lab",
-                 "activity" if b.is_activity else "lab"),
         ("xml bytes", f"{len(a.xml):,}", f"{len(b.xml):,}"),
-    ]
-    for name, va, vb in rows:
+    ):
         mark = " " if va == vb else "*"
         if va != vb:
-            same = False
+            same_container = False
         print(f"{mark}{name:<11} {va:<28} {vb:<28}")
 
-    if a.xml == b.xml:
-        print("\nXML payloads are byte-identical.")
+    diff = diff_labs(Lab.from_bytes(a.xml), Lab.from_bytes(b.xml))
+    lines = diff.summary_lines()
+
+    if diff.identical and same_container and a.xml == b.xml:
+        print("\nDocuments are identical.")
         return 0
 
-    same = False
+    if diff.identical:
+        print("\nNo semantic network differences (documents differ only in layout/metadata).")
+        return 0 if same_container else 1
+
+    print(f"\n{len(lines)} semantic difference(s):")
+    for line in lines:
+        print(f"  {line}")
+
     if args.unified:
-        diff = difflib.unified_diff(
-            _xml_text(a.xml),
-            _xml_text(b.xml),
-            fromfile=str(args.file_a),
-            tofile=str(args.file_b),
-            n=args.context,
+        text_a = _xml_text(a.xml)
+        text_b = _xml_text(b.xml)
+        sys.stdout.writelines(
+            difflib.unified_diff(
+                text_a, text_b,
+                fromfile=str(args.file_a), tofile=str(args.file_b),
+                n=args.context,
+            )
         )
-        sys.stdout.writelines(diff)
+    return 1
+
+
+def cmd_export(args: argparse.Namespace) -> int:
+    """Render the topology for external tooling."""
+    container = _load(args.file)
+    lab = Lab.from_bytes(container.xml)
+    rendered = export(lab, args.format)
+
+    if args.output is not None:
+        args.output.write_text(rendered, encoding="utf-8")
+        print(f"wrote -> {args.output}  ({args.format})")
     else:
-        print("\nXML payloads differ. Re-run with --unified for a text diff.")
-    return 0 if same else 1
+        sys.stdout.write(rendered)
+    return 0
 
 
 # --------------------------------------------------------------------------
@@ -222,6 +243,12 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--force", action="store_true", help="overwrite the output")
     p.add_argument("--verify", action="store_true", help="decode again and compare")
     p.set_defaults(func=cmd_pack)
+
+    p = sub.add_parser("export", help="render topology for external tooling")
+    p.add_argument("file", type=Path)
+    p.add_argument("--format", default="graphviz", choices=sorted(EXPORTERS))
+    p.add_argument("-o", "--output", type=Path, help="write to file instead of stdout")
+    p.set_defaults(func=cmd_export)
 
     p = sub.add_parser("diff", help="compare two containers")
     p.add_argument("file_a", type=Path)

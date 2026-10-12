@@ -165,7 +165,7 @@ def test_cli_pack_refuses_to_overwrite_without_force(tmp_path: Path) -> None:
 
 def test_cli_diff_identical_is_exit_zero(capsys: pytest.CaptureFixture[str]) -> None:
     assert main(["diff", str(LAB), str(LAB)]) == 0
-    assert "byte-identical" in capsys.readouterr().out
+    assert "identical" in capsys.readouterr().out.lower()
 
 
 def test_cli_diff_detects_differences(capsys: pytest.CaptureFixture[str]) -> None:
