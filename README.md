@@ -124,15 +124,30 @@ Example decrypted root elements:
 
 ## Status / scope
 
-* **Fully decoded, both directions.** `decode(encode(xml)) == xml` and
-  `encode(decode(file)) == file` **byte-for-byte** on every sample tested
-  (`.pkt` and `.pka`, including 20 MB+ activity files).
+**Both container families are fully decoded, both directions.**
+`encode(decode(f)) == f` **byte-for-byte on 1058 of 1058 real containers** — see
+[`docs/CORPUS_VERIFICATION.md`](docs/CORPUS_VERIFICATION.md).
+
+| Family | Written by | Transform | Files verified |
+| --- | --- | --- | --- |
+| **modern** | PT **5.3.3** → 9.0.1 | layer A → Crypto++ EAX (Twofish) → layer B → qCompress | 865 |
+| **legacy** | PT **4.1** → 5.3.2 | layer B → qCompress *(no AEAD, no reversal)* | 193 |
+
 * The AEAD authentication tag is reproduced exactly and verified on load.
-* Verified against **Packet Tracer 9.0.1.0858**, Linux x86-64.
-* `.pkt`/`.pka` (Twofish) are fully supported.  The `.pta`/`.pkc` (Serpent) and
-  internal `sm`/`userapp` (CAST256) formats are documented but need a crypto
-  backend with Serpent/CAST6 (stock `libgcrypt` has no CAST6; some builds also
-  omit Serpent).
+* Verified against **Packet Tracer 9.0.1.0858** (Linux x86-64) and 1,058 real
+  files spanning **PT 4.1 through PT 9.0.1**.
+* **Neither family has a magic header.** Detection is verifier-based: the EAX tag
+  for the modern family (false-positive rate 2⁻¹²⁸), a structural qCompress probe
+  for the legacy one. The container switchover is exactly 5.3.2 → 5.3.3.
+* Documents are **not always well-formed XML** — `<LINE>` config text carries raw
+  control bytes (the Cisco `banner motd ^C…^C` delimiter is a literal `\x03`) and
+  PT 4.1 documents end with a trailing NUL. Do not use a validating parser.
+* Three root elements exist: `PACKETTRACER5`, `PACKETTRACER5_ACTIVITY` and
+  `PACKETTRACER_ACTIVITY` (PT 4.x). Root element is **not** a container
+  discriminator.
+* `.pkt`/`.pka` are fully supported. The `.pta`/`.pkc` (Serpent) and internal
+  `sm`/`userapp` (CAST-256) flavours are specified but need a crypto backend
+  with Serpent/CAST-256 (stock `libgcrypt` has neither).
 
 ## How it was found
 
