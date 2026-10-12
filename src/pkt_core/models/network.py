@@ -11,7 +11,7 @@ from pkt_core.models.schema import (
     PortConfig,
     WirelessConfig,
 )
-from pkt_core.xml.nodes import XmlElement
+from pkt_core.xml.nodes import XmlElement, XmlText
 
 __all__ = ["Port", "Module", "Workspace", "Device", "Cable", "Link"]
 
@@ -200,6 +200,44 @@ class Device(PktNode):
     def name(self) -> str:
         node = self._engine().find("NAME")
         return node.text.strip() if node is not None else ""
+
+    def set_name(self, value: str) -> None:
+        """Rename the device.
+
+        The name lives under ``<DEVICE><ENGINE><NAME>``, not as a direct child
+        of ``<DEVICE>`` - using the generic setter would create a second,
+        ignored ``<NAME>`` and leave the device unchanged.
+        """
+        engine = self._engine()
+        node = engine.find("NAME")
+        if node is None:
+            node = XmlElement(name=b"NAME")
+            engine.append(node)
+        node.children = [XmlText(data=value.encode("utf-8"))]
+        node._dirty = True
+        engine._dirty = True
+        self._el._dirty = True
+
+    def set_position(self, x: float, y: float) -> None:
+        """Move the device on the logical canvas."""
+        node = self._el.find("WORKSPACE")
+        if node is None:
+            node = XmlElement(name=b"WORKSPACE")
+            self._el.append(node)
+        logical = node.find("LOGICAL")
+        if logical is None:
+            logical = XmlElement(name=b"LOGICAL")
+            node.append(logical)
+        for tag, val in (("X", str(x)), ("Y", str(y))):
+            field = logical.find(tag)
+            if field is None:
+                field = XmlElement(name=tag.encode("utf-8"))
+                logical.append(field)
+            field.children = [XmlText(data=val.encode("utf-8"))]
+            field._dirty = True
+        logical._dirty = True
+        node._dirty = True
+        self._el._dirty = True
 
     @property
     def powered(self) -> bool:

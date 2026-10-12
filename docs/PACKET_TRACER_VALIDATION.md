@@ -10,8 +10,9 @@ Tracer application itself accepts what we write.
 | Check | Result |
 | --- | --- |
 | Container round-trip byte-exact | **1058 / 1058** |
-| Packet Tracer opens a repacked file | **PASS — verified visually in PT 7.3.1** |
+| Packet Tracer opens a repacked file | **PASS — verified visually in PT 7.3.1 and PT 9.0.1** |
 | Original vs repacked render | **identical** (92 of 1,600,000 pixels differ — the ticking clock) |
+| **A modified, re-encoded file opens in PT 9.0.1** | **PASS** — semantic edit rendered correctly |
 
 Harness: [`tools/verify_in_packet_tracer.sh`](../tools/verify_in_packet_tracer.sh).
 
@@ -52,7 +53,37 @@ raised was about an expired *script-module* publisher certificate (the
 This closes the Phase 4 acceptance criterion: **a repackaged file opens cleanly
 in the real Packet Tracer application.**
 
-## Why PT 9.0.1 could not be used for the visual check
+## PT 9.0.1 — verified
+
+The login wall was crossed with the operator's own Networking Academy account
+(credentials entered directly into the application; the tooling never handled
+them), and PT **9.0.1** — the exact build the format specification derives from
+— was exercised:
+
+| Test | Result |
+| --- | --- |
+| Untouched corpus file | Renders: 2811/2960-24TT/PC-PT/Server-PT devices, IP labels, cabling, canvas annotations |
+| **Modified + re-encoded file** | **Renders correctly, including the edit** |
+| Load errors | none |
+
+The modified file is the test that actually matters. Its bytes were produced by
+editing the parsed model and re-encoding — they differ from the original and
+were **never written by Packet Tracer**. The edit was a semantic one:
+
+* device `Router0` renamed to `PKT_CORE_RENAMED`
+* moved from canvas `(574.5, 196.0)` to `(123, 456)`
+
+Packet Tracer 9.0.1 rendered exactly that: the renamed 2811 appears at the new
+coordinates under the label `…ORE_RENAMED`, its old slot is empty, and the
+cabling re-routes to the new position.
+
+This closes the acceptance criterion for both claims:
+
+1. `encode(decode(f)) == f` byte-for-byte on 1,058 real files, **and**
+2. the real application opens and renders what we write — including files
+   Packet Tracer never produced.
+
+## Why PT 9.0.1 originally could not be used for the visual check
 
 PT 9.0.1 will not proceed past its start screen without a **Cisco Networking
 Academy login**:
