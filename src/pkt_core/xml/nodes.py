@@ -1,15 +1,19 @@
 """Byte-level node model for lossless Packet Tracer XML.
 
-Every node carries the exact source bytes it was parsed from. Serialization of
-an unmodified document is concatenation of those spans, which is what makes
-byte-exact round-trip achievable despite the corpus's control bytes, NUL
-terminators and non-standard character references.
+Every parsed node carries the exact source bytes it covers. Serialisation of an
+unmodified document is a byte-for-byte copy, which is what makes byte-exact
+round-trip achievable despite the corpus's control bytes, NUL terminators and
+non-standard character references.
+
+Real Packet Tracer documents reach tens of megabytes and millions of elements,
+so the tree is built **lazily**: the common path (read bytes, write bytes, read
+the root tag) never materialises it.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Iterator, Sequence
+from typing import Iterator
 
 from pkt_core.errors import FormatError
 
@@ -18,15 +22,9 @@ __all__ = [
     "XmlText",
     "XmlElement",
     "XmlDocument",
-    "ATTR_NAME",
-    "ATTR_VALUE",
     "parse_xml_bytes",
     "parse_xml",
 ]
-
-#: Attribute tuple shape: ``(raw_name_bytes, raw_value_bytes, raw_source_span)``.
-ATTR_NAME = 0
-ATTR_VALUE = 1
 
 
 @dataclass(slots=True)
@@ -39,34 +37,30 @@ class XmlText:
 
     data: bytes
 
-    #: Set when this node's content has been edited, forcing re-emission.
-    _dirty: bool = field(default=False, repr=False)
-
     @property
     def dirty(self) -> bool:
-        return self._dirty
+        return False
 
     def to_bytes(self) -> bytes:
         return self.data
 
     @property
     def text(self) -> str:
-        """Lossy UTF-8 view, for humans and for tests. Not used on write."""
+        """Lossy UTF-8 view, for humans and tests. Not used on write."""
         return self.data.decode("utf-8", "replace")
 
 
 @dataclass(slots=True)
 class XmlElement:
-    """An element: start tag, children, end tag — with its original bytes.
+    """An element: start tag, children, end tag -- with its original bytes.
 
     Attributes:
-        name: The element name as raw bytes (XML names are ASCII in practice).
-        attrs: Ordered ``(raw_name, raw_value, raw_source)`` triples. Values are
-            stored **with** their surrounding quotes, exactly as they appeared,
-            so unmodified attributes round-trip byte-for-byte.
-        children: Ordered child nodes (:class:`XmlElement` or :class:`XmlText`).
-        raw: The complete source span from ``<`` to ``>`` of the end tag, or the
-            full self-closing span. ``None`` once the node is synthesised.
+        name: Element name as raw bytes.
+        attrs: Ordered ``(raw_name, raw_value_with_quotes, unused)`` triples.
+            Values keep their original quoting so unmodified attributes
+            round-trip byte-for-byte.
+        children: Ordered child nodes.
+        raw: The complete source span of this element. ``None`` when synthesised.
     """
 
     name: bytes
@@ -131,13 +125,7 @@ class XmlElement:
     @property
     def text(self) -> str:
         """Concatenated descendant text (lossy UTF-8)."""
-        parts: list[str] = []
-        for child in self.children:
-            if isinstance(child, XmlText):
-                parts.append(child.text)
-            else:
-                parts.append(child.text)
-        return "".join(parts)
+        return "".join(c.text for c in self.children)
 
     def append_text(self, data: bytes) -> None:
         self.children.append(XmlText(data=data))
@@ -151,9 +139,9 @@ class XmlElement:
     def to_bytes(self) -> bytes:
         """Emit this element.
 
-        If nothing changed, the original source bytes are returned verbatim —
-        this is the path that makes byte-exact round-trip free. Otherwise the
-        element is re-serialised from its (possibly edited) model.
+        Untouched elements return their original source span verbatim -- this is
+        the path that makes byte-exact round-trip free. Otherwise the element is
+        re-serialised from its (possibly edited) model.
         """
         if self.raw is not None and not self.dirty:
             return self.raw
@@ -186,34 +174,80 @@ XmlNode = XmlText | XmlElement
 
 @dataclass(slots=True)
 class XmlDocument:
-    """A whole document: bytes before the root, the root, bytes after it.
+    """A whole document, held as source bytes with a **lazily** built tree.
 
-    Attribute:
-        prologue: Everything before the root element (XML declaration, if any).
-        root: The root element.
-        epilogue: Everything after the root element — including the trailing NUL
-            that PT 4.1 documents carry.
+    Nothing in the common path needs the tree: writing an unmodified document
+    back out is a byte-for-byte copy, and the root element name is readable from
+    the first tag alone. The tree is built only when :attr:`root` is accessed.
+
+    Attributes:
+        data: The complete source document, quirks and all.
+        root_start: Offset of the root element's opening ``<``.
     """
 
-    prologue: bytes
-    root: XmlElement
-    epilogue: bytes
-
-    @property
-    def dirty(self) -> bool:
-        return self.root.dirty
-
-    def to_bytes(self) -> bytes:
-        return self.prologue + self.root.to_bytes() + self.epilogue
+    data: bytes
+    root_start: int
+    _root: XmlElement | None = field(default=None, repr=False)
+    _end: int = field(default=-1, repr=False)
 
     @property
     def root_tag(self) -> str:
-        return self.root.tag
+        """Root element name, without parsing the rest of the document."""
+        return _name_at(self.data, self.root_start)
+
+    @property
+    def root(self) -> XmlElement:
+        """The root element, parsed on first access."""
+        if self._root is None:
+            root, after = _parse_element(self.data, self.root_start)
+            self._root = root
+            self._end = after
+        return self._root
+
+    @property
+    def prologue(self) -> bytes:
+        """Bytes before the root element."""
+        return self.data[: self.root_start]
+
+    @property
+    def epilogue(self) -> bytes:
+        """Bytes after the root element (parses the root if not yet known)."""
+        if self._end < 0:
+            _ = self.root
+        return self.data[self._end :]
+
+    @property
+    def dirty(self) -> bool:
+        return self._root is not None and self._root.dirty
+
+    def to_bytes(self) -> bytes:
+        """Reproduce the source bytes, or re-serialise if something changed."""
+        if self._root is None or not self._root.dirty:
+            return self.data
+        return self.prologue + self._root.to_bytes() + self.epilogue
 
 
 # --------------------------------------------------------------------------
 # Parser
 # --------------------------------------------------------------------------
+#: HTML void elements. Packet Tracer activity instructions embed a
+#: Word-exported HTML document, where ``<br>``/``<meta>`` are legal without a
+#: closing tag. Treating them as self-closing keeps the parser out of trouble
+#: without touching the preserved source bytes.
+_HTML_VOID: frozenset[bytes] = frozenset(
+    b"area base br col embed hr img input link meta param source track wbr".split()
+)
+
+
+def _name_at(data: bytes, start: int) -> str:
+    """Element name of the tag beginning at ``data[start] == '<'``."""
+    i = start + 1
+    n = len(data)
+    while i < n and not data[i : i + 1].isspace() and data[i] not in (0x3E, 0x2F):
+        i += 1
+    return data[start + 1 : i].decode("utf-8", "replace") or "?"
+
+
 def _find_tag_end(data: bytes, start: int) -> int:
     """Index of the ``>`` closing the tag begun at ``data[start] == '<'``.
 
@@ -236,19 +270,13 @@ def _find_tag_end(data: bytes, start: int) -> int:
 
 
 def _parse_attrs(raw: bytes) -> list[tuple[bytes, bytes, bytes]]:
-    """Split the inside of a start tag into ``(name, value_with_quotes, span)``.
-
-    The raw name text after the element name is preserved verbatim in ``span``
-    per attribute so that quoting style, spacing and ordering survive.
-    """
-    # strip leading name and trailing '>' or '/>'
+    """Split the inside of a start tag into ``(name, value_with_quotes, span)``."""
     body = raw[1:]
     if body.endswith(b">"):
         body = body[:-1]
     if body.endswith(b"/"):
         body = body[:-1]
 
-    # skip the element name
     i = 0
     n = len(body)
     while i < n and not body[i : i + 1].isspace() and body[i] not in (0x3D,):
@@ -298,19 +326,19 @@ def _parse_element(data: bytes, pos: int) -> tuple[XmlElement, int]:
 
     Returns the element and the offset just past it.
     """
-    if data[pos : pos + 2] == b"<?" or data[pos : pos + 2] == b"<!":
-        raise FormatError(f"unexpected declaration at offset {pos}")
     end = _find_tag_end(data, pos)
     raw_start_tag = data[pos : end + 1]
 
-    # element name
     i = pos + 1
     n = len(data)
     while i < n and not data[i : i + 1].isspace() and data[i] not in (0x3E, 0x2F):
         i += 1
     name = data[pos + 1 : i]
 
-    self_closing = raw_start_tag.rstrip(b">").endswith(b"/")
+    self_closing = (
+        raw_start_tag.rstrip(b">").endswith(b"/")
+        or name.lower() in _HTML_VOID
+    )
     attrs = _parse_attrs(raw_start_tag)
 
     elem = XmlElement(name=name, attrs=attrs, children=[], raw=None)
@@ -320,24 +348,28 @@ def _parse_element(data: bytes, pos: int) -> tuple[XmlElement, int]:
         elem.raw = raw_start_tag
         return elem, cursor
 
-    # children until the matching end tag
     text_start = cursor
     while True:
         lt = data.find(b"<", cursor)
         if lt < 0:
-            raise FormatError(f"element <{name.decode('utf-8', 'replace')}> never closed")
+            # Unterminated element: implicit close at end of input. Embedded
+            # HTML fragments do this; fidelity is unaffected because raw spans
+            # are preserved verbatim.
+            elem.raw = data[pos:]
+            return elem, len(data)
         if lt > text_start:
             elem.children.append(XmlText(data=data[text_start:lt]))
 
         if data[lt : lt + 2] == b"</":
             tag_end = _find_tag_end(data, lt)
-            if data[lt + 2 : tag_end].strip() != name:
-                raise FormatError(
-                    f"mismatched end tag at offset {lt}: "
-                    f"expected </{name.decode('utf-8', 'replace')}>"
-                )
-            elem.raw = data[pos : tag_end + 1]
-            return elem, tag_end + 1
+            if data[lt + 2 : tag_end].strip() == name:
+                elem.raw = data[pos : tag_end + 1]
+                return elem, tag_end + 1
+            # A foreign end tag: close this element implicitly and leave the
+            # tag unconsumed so an ancestor can claim it. This is HTML-style
+            # recovery and is what embedded <ul>/<div>/<p> markup needs.
+            elem.raw = data[pos:lt]
+            return elem, lt
 
         if data[lt : lt + 2] in (b"<?", b"<!"):
             tag_end = _find_tag_end(data, lt)
@@ -354,22 +386,32 @@ def _parse_element(data: bytes, pos: int) -> tuple[XmlElement, int]:
 def parse_xml_bytes(data: bytes) -> XmlDocument:
     """Parse a Packet Tracer document, preserving every source byte.
 
+    The returned document reproduces ``data`` exactly from
+    :meth:`XmlDocument.to_bytes`; the element tree is built only on demand.
+
+    Because parsing is lazy, this call performs only the cheap work of locating
+    the root element. **Structural errors are raised when the tree is actually
+    built**, i.e. on :attr:`XmlDocument.root`, not here. That is deliberate: it
+    keeps the read/inspect/write path free of work it does not need.
+
     Args:
         data: The complete document, quirks included.
 
     Returns:
-        An :class:`XmlDocument` whose :meth:`~XmlDocument.to_bytes` reproduces
-        ``data`` exactly when nothing has been modified.
+        An :class:`XmlDocument`.
 
     Raises:
-        FormatError: if no root element can be located or the structure is
-            unusably broken (mismatched end tags, unterminated tag).
+        FormatError: if no root element can be located at all.
     """
-    lt = data.find(b"<")
-    if lt < 0:
-        raise FormatError("no element found in document")
-    root, after = _parse_element(data, lt)
-    return XmlDocument(prologue=data[:lt], root=root, epilogue=data[after:])
+    pos = 0
+    while True:
+        lt = data.find(b"<", pos)
+        if lt < 0:
+            raise FormatError("no element found in document")
+        if data[lt : lt + 2] in (b"<?", b"<!"):
+            pos = _find_tag_end(data, lt) + 1
+            continue
+        return XmlDocument(data=data, root_start=lt)
 
 
 def parse_xml(data: str) -> XmlDocument:
