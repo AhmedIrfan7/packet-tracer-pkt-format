@@ -32,7 +32,7 @@ from pkt_core import (
 )
 from pkt_core.diff import diff_labs
 from pkt_core.export import EXPORTERS, export
-from pkt_core.models import Lab
+from pkt_core.models import Lab, RunningConfig
 
 __all__ = ["main", "cmd_info", "cmd_unpack", "cmd_pack", "cmd_diff", "cmd_export"]
 
@@ -86,8 +86,21 @@ def cmd_info(args: argparse.Namespace) -> int:
 # --------------------------------------------------------------------------
 # pkt unpack
 # --------------------------------------------------------------------------
+def _safe_name(value: str) -> str:
+    return "".join(c if c.isalnum() or c in "-_." else "_" for c in value).strip("_") or "unnamed"
+
+
 def cmd_unpack(args: argparse.Namespace) -> int:
-    """Write the inner XML out, alongside a small metadata sidecar."""
+    """Unpack a container into XML, device configs and a topology graph.
+
+    Produces:
+
+    ``<stem>.xml``           the complete inner document, byte-exact
+    ``<stem>.container.json`` container metadata (format, cipher, keys, root)
+    ``configs/<device>.cfg``  each device's IOS running configuration
+    ``topology.dot``          Graphviz rendering of the network
+    ``topology.json``         device/link inventory for tooling
+    """
     path: Path = args.file
     container = _load(path)
 
@@ -112,9 +125,42 @@ def cmd_unpack(args: argparse.Namespace) -> int:
     meta_path = out_dir / f"{stem}.container.json"
     meta_path.write_text(json.dumps(meta, indent=2) + "\n", encoding="utf-8")
 
-    print(f"xml   -> {xml_path}  ({len(container.xml):,} bytes)")
-    print(f"meta  -> {meta_path}")
-    print(f"kind  : {'scored activity' if container.is_activity else 'network lab'}")
+    lab = Lab.from_bytes(container.xml)
+
+    # per-device IOS running configuration
+    cfg_dir = out_dir / "configs"
+    written_cfgs = 0
+    if args.configs:
+        cfg_dir.mkdir(exist_ok=True)
+        for dev in lab.devices:
+            engine = dev.element.find("ENGINE")
+            if engine is None:
+                continue
+            node = engine.find("RUNNINGCONFIG")
+            if node is None:
+                continue
+            lines = RunningConfig.from_element(node).lines
+            if not lines:
+                continue
+            # raw bytes on purpose: config text carries ^C banner delimiters
+            (cfg_dir / f"{_safe_name(dev.name)}.cfg").write_bytes(b"\n".join(lines) + b"\n")
+            written_cfgs += 1
+
+    # topology graph + inventory
+    if args.topology:
+        from pkt_core.export import to_graphviz, to_netbox
+
+        (out_dir / "topology.dot").write_text(to_graphviz(lab), encoding="utf-8")
+        (out_dir / "topology.json").write_text(to_netbox(lab), encoding="utf-8")
+
+    print(f"xml      -> {xml_path}  ({len(container.xml):,} bytes)")
+    print(f"meta     -> {meta_path}")
+    if args.configs:
+        print(f"configs  -> {cfg_dir}/  ({written_cfgs} device configs)")
+    if args.topology:
+        print(f"topology -> {out_dir / 'topology.dot'}, {out_dir / 'topology.json'}")
+    print(f"kind     : {'scored activity' if container.is_activity else 'network lab'}")
+    print(f"network  : {len(lab.devices)} devices, {len(lab.links)} links")
     return 0
 
 
@@ -230,9 +276,28 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--json", action="store_true", help="also print machine-readable output")
     p.set_defaults(func=cmd_info)
 
-    p = sub.add_parser("unpack", help="extract the inner XML and metadata")
+    p = sub.add_parser(
+        "unpack",
+        help="extract XML, device configs and a topology graph",
+    )
     p.add_argument("file", type=Path)
     p.add_argument("-o", "--output", type=Path, required=True, help="output directory")
+    p.add_argument(
+        "--configs", action="store_true", default=True,
+        help="write per-device IOS running configs (default on)",
+    )
+    p.add_argument(
+        "--no-configs", dest="configs", action="store_false",
+        help="skip per-device IOS running configs",
+    )
+    p.add_argument(
+        "--topology", action="store_true", default=True,
+        help="write topology.dot and topology.json (default on)",
+    )
+    p.add_argument(
+        "--no-topology", dest="topology", action="store_false",
+        help="skip the topology graph",
+    )
     p.set_defaults(func=cmd_unpack)
 
     p = sub.add_parser("pack", help="build a container from XML")

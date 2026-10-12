@@ -197,3 +197,48 @@ def test_cli_error_on_non_container(tmp_path: Path, capsys: pytest.CaptureFixtur
     junk.write_bytes(bytes(range(256)) * 4)
     assert main(["info", str(junk)]) == 2
     assert "error:" in capsys.readouterr().err
+
+
+# --------------------------------------------------------------------------
+# pkt unpack emits the full artefact set
+# --------------------------------------------------------------------------
+def test_unpack_writes_configs_and_topology(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    out_dir = tmp_path / "out"
+    assert main(["unpack", str(LAB), "-o", str(out_dir)]) == 0
+    out = capsys.readouterr().out
+
+    assert (out_dir / f"{LAB.stem}.xml").exists()
+    assert (out_dir / f"{LAB.stem}.container.json").exists()
+    assert (out_dir / "topology.dot").exists()
+    assert (out_dir / "topology.json").exists()
+    assert "configs" in out and "topology" in out
+
+    # the committed sample ships R1/SW1/R2 with IOS config
+    cfgs = sorted((out_dir / "configs").glob("*.cfg"))
+    assert cfgs, "expected at least one extracted device config"
+    body = cfgs[0].read_bytes()
+    assert body, "config must not be empty"
+
+
+def test_unpack_can_skip_configs_and_topology(tmp_path: Path) -> None:
+    out_dir = tmp_path / "lean"
+    assert main(["unpack", str(LAB), "-o", str(out_dir), "--no-configs", "--no-topology"]) == 0
+    assert not (out_dir / "configs").exists()
+    assert not (out_dir / "topology.dot").exists()
+    assert (out_dir / f"{LAB.stem}.xml").exists()
+
+
+def test_unpack_topology_dot_is_wellformed(tmp_path: Path) -> None:
+    out_dir = tmp_path / "dot"
+    assert main(["unpack", str(LAB), "-o", str(out_dir)]) == 0
+    dot = (out_dir / "topology.dot").read_text(encoding="utf-8")
+    assert dot.startswith("digraph")
+    assert dot.rstrip().endswith("}")
+
+
+def test_unpack_topology_json_is_valid(tmp_path: Path) -> None:
+    out_dir = tmp_path / "js"
+    assert main(["unpack", str(LAB), "-o", str(out_dir)]) == 0
+    payload = json.loads((out_dir / "topology.json").read_text(encoding="utf-8"))
+    assert payload["format"] == "pkt-core/netbox-inventory"
+    assert payload["devices"]
