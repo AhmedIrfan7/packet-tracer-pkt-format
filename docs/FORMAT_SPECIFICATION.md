@@ -4,11 +4,20 @@
 
 | Family | Versions | Status |
 | --- | --- | --- |
-| **M** — modern | PT 6.0 → 9 | Complete. Byte-exact round-trip on 865 real files. |
-| **L** — legacy | PT 5.x | Complete. Byte-exact round-trip on 193 real files. See [`LEGACY_FORMAT.md`](LEGACY_FORMAT.md). |
+| **M** — modern | PT **5.3.3** → 9.0.1 | Complete. Byte-exact round-trip on 822 real files. |
+| **L** — legacy | PT **4.1** → 5.3.2 | Complete. Byte-exact round-trip on 192 real files. See [`LEGACY_FORMAT.md`](LEGACY_FORMAT.md). |
 
-**Verified against:** Cisco Packet Tracer 9.0.1.0858 (Linux x86-64), plus 865
-real-world containers spanning PT 6.0 (2014) through PT 9.
+Whole-corpus proof: **1014/1014 decode and round-trip byte-exact** —
+[`CORPUS_VERIFICATION.md`](CORPUS_VERIFICATION.md).
+
+**Verified against:** Cisco Packet Tracer 9.0.1.0858 (Linux x86-64), plus 1,014
+real-world containers spanning **PT 4.1 through PT 9.0.1**.
+
+**Document caveat:** Packet Tracer documents are not always well-formed XML.
+`<LINE>` running-config text embeds raw control bytes (the Cisco `banner motd
+^C…^C` delimiter is a literal `\x03`) and PT 4.1 documents end with a trailing
+NUL. 210 of a 400-file modern sample are non-well-formed. Do not use an
+XML parser that rejects these. See [`CORPUS_VERIFICATION.md`](CORPUS_VERIFICATION.md) §5.
 
 ---
 
@@ -22,10 +31,17 @@ an authenticated-encryption layer. There are two document kinds:
 | --- | --- | --- |
 | `PACKETTRACER5` | `.pkt` | A network lab — topology, devices, configs, canvas |
 | `PACKETTRACER5_ACTIVITY` | `.pka` | A scored activity — the lab plus a scoring tree, initial-setup tree, locking tree and activity-wizard password |
+| `PACKETTRACER_ACTIVITY` | `.pka` | Scored activity with the **PT 4.x** document schema (legacy family only) |
 
-**The container is identical for both.** Only the root element differs. A `.pka`
-is not a distinct file format; it is the same container holding a different
-document.
+The `PACKETTRACER*` → `PACKETTRACER5*` rename happened at **PT 4.2**, not 5.0.
+Activity documents wrap the network document in a second `<PACKETTRACER*>`
+element and add a `<VARIABLE_MANAGER>` (present in 100% of activities, 0% of
+labs, in both families).
+
+**The container is independent of the root element.** `PACKETTRACER5` and
+`PACKETTRACER5_ACTIVITY` both occur in *both* container families, so the root
+element is **not** a container discriminator. A `.pka` is not a distinct file
+format; it is the same container holding a different document.
 
 ## 2. There is no magic header
 
@@ -226,10 +242,12 @@ builds/versions. Container byte-fidelity is therefore established on real files
 content; a re-encode from scratch may legitimately differ in the zlib bytes while
 remaining a valid container holding identical XML.
 
-## 10. Family L — legacy container (PT 5.x)
+## 10. Family L — legacy container (PT 4.1 – 5.3.2)
 
-The PT 5.x generation uses a **strictly simpler** container: no AEAD, and no byte
-reversal. The whole transform is layer B over a qCompress payload.
+Everything written before **PT 5.3.3** uses a **strictly simpler** container:
+no AEAD, and no byte reversal. The whole transform is layer B over a qCompress
+payload. The switchover is exactly 5.3.2 → 5.3.3 (zero version overlap between
+families).
 
 ```
 file bytes F

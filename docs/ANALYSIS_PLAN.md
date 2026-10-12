@@ -70,7 +70,7 @@ Everything downstream assumes verifier-based detection, not magic bytes.
 
 ## 3. Format taxonomy (evidence-backed)
 
-### Family M — modern (PT 6.0 → 9) · 865 samples · **SOLVED**
+### Family M — modern (PT 5.3.3 → 9.0.1) · 822 samples · **SOLVED**
 
 ```
 raw bytes
@@ -91,16 +91,17 @@ Verified by two independent invariants in the prior art:
 | `PACKETTRACER5` | 508 | ordinary `.pkt` lab (network topology) |
 | `PACKETTRACER5_ACTIVITY` | 357 | scored `.pka` activity (scoring tree + wizard password) |
 
-Earliest confirmed member: `ptorchilov/Packet-Tracer-Labs` (repo created 2014-11-30),
-so the modern container already existed at **PT 6.0**.
+Earliest confirmed member is `<VERSION>5.3.3.0019`; the legacy family stops at
+`5.3.3`'s predecessor `5.3.2.0027`, with **zero version overlap**. The container
+switchover is therefore **5.3.2 → 5.3.3**, not 5.x → 6.0.
 
-### Family L — legacy (PT 5.x) · 193 samples · **UNSOLVED — this is the job**
+### Family L — legacy (PT 4.1 – 5.3.2) · 192 samples · **SOLVED**
 
 Two independent populations, which is ideal for cross-validation:
 
 | Population | Files | Provenance |
 | --- | --- | --- |
-| `bbent-cis202-PTA2011__*` | 60 | Official Cisco NetAcad PTA curriculum, IT-Essentials/CCNA-1 ch. 1–11. `AllPkaFiles.zip` last-modified **2011-08-16** → PT 5.x. The 60 individual links now 404; only the bundle survives. |
+| `bbent-cis202-PTA2011__*` | 60 | Official Cisco NetAcad PTA curriculum, IT-Essentials/CCNA-1 ch. 1–11. `AllPkaFiles.zip` last-modified 2011-08-16; the content is mostly **PT 4.1** (`<VERSION>4.1`, root `PACKETTRACER_ACTIVITY`, trailing NUL) plus some 5.1. The 60 individual links now 404; only the bundle survives. |
 | `abderaoufsec/CCNA-PacketTracerlabs` (legacy subset) | 129 | Older-generation material *inside a mixed repo*: `NA-1-1…NA-4-9` series, **all 40 `NN.N.N.N 100%.pka` answer keys**, `9tut.com_*` / `Certprepare.com *` exam-sims, `NetLab 4 x VLAN/RSTP`, `CCNA Mega Lab*`, `VOIP.pka`, `IPSec-VPN.pka`, … |
 | `Rakibul73/Cisco_Network_Routing_Switching__{1,2,4,8}.pka` | 4 | — |
 

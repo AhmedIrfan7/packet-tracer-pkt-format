@@ -34,7 +34,10 @@ def _legacy_files() -> list[Path]:
     out: list[Path] = []
     for row in rows:
         name = row["filename"]
-        if not name.lower().endswith((".pkt", ".pka")):
+        # Select on decode_status, NOT the file suffix: the corpus contains carved
+        # fragments such as ``NA-4-9-DHCP.pka__103770`` whose names end in a byte
+        # offset. Only genuinely non-container items are archives.
+        if name.lower().endswith(".zip"):
             continue
         p = CORPUS / name
         if p.exists():
@@ -131,7 +134,11 @@ def test_real_legacy_files_decode(path: Path) -> None:
     raw = path.read_bytes()
     container = decode_bytes(raw)
     assert container.format_name == "legacy"
-    assert container.root_tag in ("PACKETTRACER5", "PACKETTRACER5_ACTIVITY")
+    assert container.root_tag in (
+        "PACKETTRACER5",
+        "PACKETTRACER5_ACTIVITY",
+        "PACKETTRACER_ACTIVITY",
+    )
     assert root_tag(container.xml) == container.root_tag
 
 
@@ -150,11 +157,71 @@ def test_real_legacy_roundtrip_is_byte_exact() -> None:
 
 
 @pytest.mark.skipif(not LEGACY_FILES, reason="corpus not fetched (see corpus/README.md)")
-def test_real_legacy_version_strings_mention_v5() -> None:
-    """The legacy population is the PT 5.x generation — sanity-check the claim."""
-    seen_v5 = 0
-    for path in LEGACY_FILES[:40]:
-        head = decode_bytes(path.read_bytes()).xml[:200]
-        if b"<VERSION>5" in head:
-            seen_v5 += 1
-    assert seen_v5 > 0, "expected at least some legacy files to declare VERSION 5.x"
+def test_real_legacy_spans_pt_41_to_532() -> None:
+    """The legacy family is PT 4.1 .. 5.3.2 — NOT "PT 5.x" and not "pre-PT-6".
+
+    Its newest member is 5.3.2.0027; the modern family starts at 5.3.3.0019.
+    There must be NO version >= 5.3.3 in this population, and PT 4.1 must be
+    present (it is 33% of the set).
+    """
+    versions: set[str] = set()
+    for path in LEGACY_FILES:
+        head = decode_bytes(path.read_bytes()).xml[:400].decode("utf-8", "replace")
+        i = head.find("<VERSION>")
+        if i >= 0:
+            j = head.find("</VERSION>", i)
+            if j > i:
+                versions.add(head[i + 9 : j])
+
+    assert versions, "no <VERSION> elements found"
+    assert "4.1" in versions, f"expected PT 4.1 content, saw {sorted(versions)}"
+
+    def key(v: str) -> tuple[int, ...]:
+        return tuple(int(x) for x in v.split("."))
+
+    assert all(key(v) < (5, 3, 3) for v in versions), (
+        f"legacy family must stop before 5.3.3, saw {sorted(versions, key=key)}"
+    )
+    assert max(versions, key=key) == "5.3.2.0027"
+
+
+# --------------------------------------------------------------------------
+# Document schema: three root elements, not two
+# --------------------------------------------------------------------------
+def test_all_three_root_elements_are_recognised() -> None:
+    """PACKETTRACER_ACTIVITY is the PT 4.x schema and appears in the legacy family."""
+    from pkt_core import Container
+    from pkt_core.crypto.keys import get_format
+
+    spec = get_format("legacy")
+    for root in ("PACKETTRACER5", "PACKETTRACER5_ACTIVITY", "PACKETTRACER_ACTIVITY"):
+        xml = f"<{root}><VERSION>4.1</VERSION></{root}>".encode()
+        sealed = encode_bytes(xml, "legacy")
+        c = decode_bytes(sealed)
+        assert c.root_tag == root
+        assert isinstance(c, Container)
+
+
+def test_activity_flag_covers_the_legacy_root_name() -> None:
+    """Every *_ACTIVITY root marks a scored activity, including PACKETTRACER_ACTIVITY."""
+    spec = get_format("legacy")
+    for root, expect_activity in (
+        ("PACKETTRACER5", False),
+        ("PACKETTRACER5_ACTIVITY", True),
+        ("PACKETTRACER_ACTIVITY", True),
+    ):
+        xml = f"<{root}/>".encode()
+        c = decode_bytes(encode_bytes(xml, "legacy"))
+        assert c.is_activity is expect_activity, root
+
+
+def test_root_element_is_not_a_container_discriminator() -> None:
+    """PACKETTRACER5 occurs in both families, so detection cannot use the root."""
+    xml = b"<PACKETTRACER5><VERSION>5.3.3.0019</VERSION></PACKETTRACER5>"
+    modern = encode_bytes(xml, "pkt")
+    legacy = encode_bytes(xml, "legacy")
+    assert detect_format(modern) == "pkt"
+    assert detect_format(legacy) == "legacy"
+    # Same root element, different container — detection must use the transform.
+    assert root_tag(modern if False else decode_bytes(modern).xml) == "PACKETTRACER5"
+    assert root_tag(decode_bytes(legacy).xml) == "PACKETTRACER5"

@@ -41,4 +41,7 @@ warn_unreachable = true
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = "-q --strict-markers"
+addopts = "-q --strict-markers -m 'not corpus'"
+markers = [
+  "corpus: whole-corpus acceptance tests (slow; opt in with -m corpus)",
+]
