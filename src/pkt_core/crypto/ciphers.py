@@ -6,14 +6,15 @@ terms of that oracle, so the backend is swappable.
 
 Two backends are provided:
 
-* **Pure Python** (:mod:`pkt_core.crypto.ciphers_pure`) — portable and complete.
-  Implements Twofish, Serpent and CAST-256 with no dependencies. This is the
-  only way to get CAST-256, which ``libgcrypt`` does not provide at all.
-* **libgcrypt** — faster where it covers an algorithm, used automatically.
+* **libgcrypt** — used first, because it is roughly 100x faster and a container
+  run is CTR + CMAC over the whole payload. A 600 KB file is ~38k blocks.
+* **Pure Python** (:mod:`pkt_core.crypto.ciphers_pure`) — the portable fallback,
+  and the *only* source of CAST-256, which libgcrypt does not implement at all.
 
-Preference order is pure-Python for correctness-first portability, then
-libgcrypt; both are cross-checked against each other and against published
-known-answer tests in ``tests/test_ciphers.py``.
+Preference order is therefore libgcrypt when it covers the algorithm, pure
+Python otherwise. The two are cross-checked against each other and against
+published known-answer tests in ``tests/test_ciphers.py``, so the fast path is
+not the unverified one.
 
 .. note::
 
@@ -75,9 +76,14 @@ _GCRY_NAMES: Final[tuple[str, ...]] = (
 
 @runtime_checkable
 class BlockCipher(Protocol):
-    """Minimal interface required by :mod:`pkt_core.crypto.primitives`."""
+    """Minimal interface required by :mod:`pkt_core.crypto.primitives`.
+
+    Both backends implement this, so callers never need to know which one they
+    were handed.
+    """
 
     block_size: int
+    key_size: int
 
     def encrypt_block(self, block: bytes) -> bytes:
         """Encrypt one block and return the ciphertext block."""
@@ -176,6 +182,8 @@ class LibgcryptCipher:
     """A block cipher backed by ``libgcrypt`` in ECB mode."""
 
     block_size: int = BLOCK_SIZE
+    #: Length of the key this instance was constructed with.
+    key_size: int
 
     def __init__(self, name: str, key: bytes) -> None:
         lib = _libgcrypt()
@@ -184,6 +192,7 @@ class LibgcryptCipher:
         if len(key) not in CIPHER_KEY_SIZES.get(name, ()):
             raise ValueError(f"{name} does not accept a {len(key)}-byte key")
         self._name = name
+        self.key_size = len(key)
         self._handle = lib.open(name)
         lib.setkey(self._handle, key)
 
@@ -229,8 +238,8 @@ def _pure_cipher(name: str, key: bytes) -> BlockCipher | None:
 def get_cipher(name: str, key: bytes) -> BlockCipher:
     """Construct the named block cipher.
 
-    Preference order: pure Python (portable, and the only source of CAST-256),
-    then ``libgcrypt`` where it covers the algorithm.
+    Preference order: ``libgcrypt`` where it covers the algorithm (fast), then
+    pure Python (portable, and the only source of CAST-256).
 
     Args:
         name: ``"twofish"``, ``"serpent128"``, ``"serpent256"``, ``"cast256"``…
@@ -245,12 +254,17 @@ def get_cipher(name: str, key: bytes) -> BlockCipher:
     if len(key) not in CIPHER_KEY_SIZES[name]:
         raise ValueError(f"{name} does not accept a {len(key)}-byte key")
 
+    # Native first: this is on the hot path for every container operation and
+    # the two backends are proven byte-identical in tests/test_ciphers.py.
+    if name in _GCRY_NAMES:
+        try:
+            return LibgcryptCipher(name, key)
+        except UnsupportedCipherError:
+            pass  # fall through to the pure implementation
+
     impl = _pure_cipher(name, key)
     if impl is not None:
         return impl
-
-    if name in _GCRY_NAMES:
-        return LibgcryptCipher(name, key)
 
     raise UnsupportedCipherError(
         f"cipher {name!r} needs a backend: libgcrypt has no {name!r} and no "
