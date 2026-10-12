@@ -1,9 +1,11 @@
 # Packet Tracer `.pkt` / `.pka` — Binary Format Specification
 
-**Status:** Family M (modern container) is **complete and verified**. Family L
-(legacy container) is documented to the extent established in
-[`LEGACY_FORMAT.md`](LEGACY_FORMAT.md) and remains an open reverse-engineering
-target.
+**Status: COMPLETE.** Both container families are specified and verified.
+
+| Family | Versions | Status |
+| --- | --- | --- |
+| **M** — modern | PT 6.0 → 9 | Complete. Byte-exact round-trip on 865 real files. |
+| **L** — legacy | PT 5.x | Complete. Byte-exact round-trip on 193 real files. See [`LEGACY_FORMAT.md`](LEGACY_FORMAT.md). |
 
 **Verified against:** Cisco Packet Tracer 9.0.1.0858 (Linux x86-64), plus 865
 real-world containers spanning PT 6.0 (2014) through PT 9.
@@ -224,14 +226,40 @@ builds/versions. Container byte-fidelity is therefore established on real files
 content; a re-encode from scratch may legitimately differ in the zlib bytes while
 remaining a valid container holding identical XML.
 
-## 10. Family L — legacy container (open)
+## 10. Family L — legacy container (PT 5.x)
 
-193 real containers, mostly PT 5.x (2011 NetAcad curriculum and older exam-sims),
-do **not** authenticate under the Family M parameters and use a different
-transform. They are characterised and being worked in
-[`LEGACY_FORMAT.md`](LEGACY_FORMAT.md). Anything implementing this specification
-must treat "did not authenticate under any known Family M parameter set" as a
-*positive identification of Family L*, not as corruption.
+The PT 5.x generation uses a **strictly simpler** container: no AEAD, and no byte
+reversal. The whole transform is layer B over a qCompress payload.
+
+```
+file bytes F
+  |  layer B : P[i] ^= (n - i) & 0xFF        Util::deobfuscateBytes
+  v
+Qt qCompress : 4-byte BE length + zlib
+  |
+  v
+UTF-8 XML
+```
+
+| Parameter | Family L | Family M |
+| --- | --- | --- |
+| Byte reversal (layer A) | **no** | yes |
+| AEAD + tag | **no** | yes (Crypto++ EAX) |
+| Positional XOR (layer B) | yes | yes |
+| qCompress + zlib | yes | yes |
+| Inner document | `PACKETTRACER5` / `PACKETTRACER5_ACTIVITY` | same |
+
+Because `layer_b` is an involution, encode is literally the same call as decode.
+
+**Both families lack a magic header**, so an implementation must not assume that
+high-entropy prefix implies encryption. Detection order is: try the modern
+flavours and accept the first whose EAX tag verifies (2^-128 false positives);
+otherwise, if the bytes deobfuscate into a valid qCompress payload, classify as
+Family L. "Did not authenticate" is therefore a *positive identification* of
+Family L, not corruption.
+
+Verified 193/193 decode and 193/193 byte-exact round-trip; see
+[`LEGACY_FORMAT.md`](LEGACY_FORMAT.md).
 
 ## 11. Provenance
 
@@ -241,7 +269,8 @@ must treat "did not authenticate under any known Family M parameter set" as a
 * Dynamic: Packet Tracer driven headless under `Xvfb` with `gdb` breakpoints
   dumping `Util::decipher<Twofish>` and `qUncompress` arguments, giving a known
   plaintext/ciphertext pair that pinned the counter and both obfuscation layers.
-* Empirical: 865 real-world containers, 40 upstream sources, byte-exact round-trip.
+* Empirical: 1,059 real-world containers (865 modern + 193 legacy), 40 upstream
+  sources, byte-exact round-trip in both families.
 
 See [`FORMAT.md`](../FORMAT.md) for the original writeup and
 [`ANALYSIS_PLAN.md`](ANALYSIS_PLAN.md) for the corpus analysis.
