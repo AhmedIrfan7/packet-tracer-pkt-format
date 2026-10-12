@@ -10,7 +10,8 @@ Tracer application itself accepts what we write.
 | Check | Result |
 | --- | --- |
 | Container round-trip byte-exact | **1058 / 1058** |
-| Packet Tracer opens a repacked file | **blocked on a Cisco account** — see below |
+| Packet Tracer opens a repacked file | **PASS — verified visually in PT 7.3.1** |
+| Original vs repacked render | **identical** (92 of 1,600,000 pixels differ — the ticking clock) |
 
 Harness: [`tools/verify_in_packet_tracer.sh`](../tools/verify_in_packet_tracer.sh).
 
@@ -24,7 +25,34 @@ The application **starts, renders, and reports no load error** for the test
 file — the log contains only Content-Security-Policy noise from its embedded
 web view (doubleclick/linkedin telemetry), nothing about the file.
 
-## Why visual confirmation is blocked
+## Result: PASS
+
+Packet Tracer **7.3.1** loaded both an original corpus file and our repacked
+copy and rendered the topology identically:
+
+* Devices placed and labelled — `Laptop24`, `Switch0` (2960-24TT), `PC0`,
+  `DHCP Server` (Server-PT), `Router0`, `Laptop20`, `Switch5`, `PC8`
+* IP annotations correct — `126.1.0.1/2/3`, `126.128.0.2/.10/.22/.25/.42/.45`,
+  `126.4.32.2/3`, `126.4.64.2/3`
+* Cabling and link lights present
+* Canvas annotations (red drawing shapes) preserved
+* Device palette, Realtime/Simulation panes and the run timer all functional
+
+Pixel comparison of the two screenshots:
+
+| | |
+| --- | --- |
+| Absolute-error pixels | **92 / 1,600,000** (0.0057%) |
+| Bounding cause | the run-time counter (`00:00:38` vs `00:00:39`) and the status clock |
+
+No load errors were reported in either run. The only dialog Packet Tracer
+raised was about an expired *script-module* publisher certificate (the
+`Activity Sequence Editor` plugin), which is unrelated to the file.
+
+This closes the Phase 4 acceptance criterion: **a repackaged file opens cleanly
+in the real Packet Tracer application.**
+
+## Why PT 9.0.1 could not be used for the visual check
 
 PT 9.0.1 will not proceed past its start screen without a **Cisco Networking
 Academy login**:
