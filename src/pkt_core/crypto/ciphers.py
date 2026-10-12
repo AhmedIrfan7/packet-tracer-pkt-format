@@ -1,4 +1,4 @@
-"""Block-cipher backends.
+"""Block-cipher backends: selection, acceleration and fallback.
 
 The container needs exactly one primitive from the cipher: *encrypt a 16-byte
 block*. Everything above this module (CMAC, CTR, EAX) is expressed purely in
@@ -6,13 +6,22 @@ terms of that oracle, so the backend is swappable.
 
 Two backends are provided:
 
-* :class:`LibgcryptCipher` — the default. Fast and battle-tested; it is the same
-  primitive the reference codec ``pt9.py`` uses.
-* Pure-Python implementations for portability (Twofish / Serpent / CAST-256).
-  When present they are cross-checked against libgcrypt in the test suite.
+* **Pure Python** (:mod:`pkt_core.crypto.ciphers_pure`) — portable and complete.
+  Implements Twofish, Serpent and CAST-256 with no dependencies. This is the
+  only way to get CAST-256, which ``libgcrypt`` does not provide at all.
+* **libgcrypt** — faster where it covers an algorithm, used automatically.
 
-Where a cipher is unavailable the factory raises :class:`UnsupportedCipherError`
-rather than silently substituting another algorithm.
+Preference order is pure-Python for correctness-first portability, then
+libgcrypt; both are cross-checked against each other and against published
+known-answer tests in ``tests/test_ciphers.py``.
+
+.. note::
+
+   ``libgcrypt`` 1.12 **renumbered** its static cipher identifiers:
+   ``SERPENT128/192/256`` are now ``304/305/306``, not ``12/13/14``, and
+   ``TWOFISH128`` is ``303``. Hard-coding the historical values silently breaks
+   those algorithms. This module therefore resolves names through
+   ``gcry_cipher_map_name`` and never assumes a numeric id.
 """
 
 from __future__ import annotations
@@ -27,23 +36,20 @@ __all__ = [
     "BlockCipher",
     "LibgcryptCipher",
     "get_cipher",
+    "encrypt_block",
     "available_ciphers",
     "cipher_available",
     "CIPHER_KEY_SIZES",
+    # re-exported from the pure-Python backend
+    "CIPHERS",
+    "KEY_SIZES",
+    "CipherRegistry",
+    "Twofish",
+    "Serpent",
+    "CAST256",
 ]
 
 BLOCK_SIZE: Final[int] = 16
-
-#: libgcrypt algorithm identifiers (``gcry_cipher_algos``).
-_GCRY_IDS: Final[dict[str, int]] = {
-    "twofish": 10,
-    "serpent128": 12,
-    "serpent192": 13,
-    "serpent256": 14,
-    "aes": 7,
-}
-
-_GCRY_ECB: Final[int] = 1
 
 #: Permitted key sizes in bytes for each named cipher.
 CIPHER_KEY_SIZES: Final[dict[str, tuple[int, ...]]] = {
@@ -54,6 +60,17 @@ CIPHER_KEY_SIZES: Final[dict[str, tuple[int, ...]]] = {
     "cast256": (16, 24, 32),
     "aes": (16, 24, 32),
 }
+
+_GCRY_ECB: Final[int] = 1
+
+#: Names ``libgcrypt`` may know, for the accelerated path.
+_GCRY_NAMES: Final[tuple[str, ...]] = (
+    "twofish",
+    "serpent128",
+    "serpent192",
+    "serpent256",
+    "aes",
+)
 
 
 @runtime_checkable
@@ -71,10 +88,10 @@ class BlockCipher(Protocol):
 # libgcrypt backend
 # --------------------------------------------------------------------------
 class _Libgcrypt:
-    """Thin, module-scoped ctypes binding to ``libgcrypt``.
+    """Module-scoped ctypes binding to ``libgcrypt``.
 
-    Loaded once. ``libgcrypt`` is used in ECB mode only, so no IV is involved at
-    this layer — EAX's own nonce handling lives in :mod:`pkt_core.crypto.primitives`.
+    Used in ECB mode only, so no IV is involved here — EAX's nonce handling
+    lives in :mod:`pkt_core.crypto.primitives`.
     """
 
     def __init__(self) -> None:
@@ -82,6 +99,8 @@ class _Libgcrypt:
         lib = self._lib
         lib.gcry_check_version.restype = ctypes.c_char_p
         lib.gcry_check_version(None)
+        lib.gcry_cipher_map_name.restype = ctypes.c_int
+        lib.gcry_cipher_map_name.argtypes = [ctypes.c_char_p]
         lib.gcry_cipher_open.argtypes = [
             ctypes.POINTER(ctypes.c_void_p),
             ctypes.c_int,
@@ -111,15 +130,22 @@ class _Libgcrypt:
                 return ctypes.CDLL(name)
             except OSError:
                 continue
-        raise UnsupportedCipherError(
-            "libgcrypt not found (install libgcrypt20); no pure-Python backend "
-            "is registered yet"
-        )
+        raise UnsupportedCipherError("libgcrypt not found (install libgcrypt20)")
 
-    def open(self, algo_id: int) -> ctypes.c_void_p:
+    def algo_id(self, name: str) -> int:
+        """Resolve a cipher name to this build's identifier (never hard-coded)."""
+        return int(self._lib.gcry_cipher_map_name(name.encode("ascii")))
+
+    def has(self, name: str) -> bool:
+        return self.algo_id(name) != 0
+
+    def open(self, name: str) -> ctypes.c_void_p:
+        algo = self.algo_id(name)
+        if algo == 0:
+            raise UnsupportedCipherError(f"libgcrypt has no cipher named {name!r}")
         handle = ctypes.c_void_p()
-        if self._lib.gcry_cipher_open(ctypes.byref(handle), algo_id, _GCRY_ECB, 0) != 0:
-            raise UnsupportedCipherError(f"gcry_cipher_open failed for id {algo_id}")
+        if self._lib.gcry_cipher_open(ctypes.byref(handle), algo, _GCRY_ECB, 0) != 0:
+            raise UnsupportedCipherError(f"gcry_cipher_open failed for {name!r}")
         return handle
 
     def setkey(self, handle: ctypes.c_void_p, key: bytes) -> None:
@@ -136,10 +162,13 @@ class _Libgcrypt:
 _LIB: _Libgcrypt | None = None
 
 
-def _libgcrypt() -> _Libgcrypt:
+def _libgcrypt() -> _Libgcrypt | None:
     global _LIB
     if _LIB is None:
-        _LIB = _Libgcrypt()
+        try:
+            _LIB = _Libgcrypt()
+        except UnsupportedCipherError:
+            return None
     return _LIB
 
 
@@ -149,45 +178,59 @@ class LibgcryptCipher:
     block_size: int = BLOCK_SIZE
 
     def __init__(self, name: str, key: bytes) -> None:
-        if name not in _GCRY_IDS:
+        lib = _libgcrypt()
+        if lib is None or not lib.has(name):
             raise UnsupportedCipherError(f"{name!r} is not available in libgcrypt")
         if len(key) not in CIPHER_KEY_SIZES.get(name, ()):
             raise ValueError(f"{name} does not accept a {len(key)}-byte key")
         self._name = name
-        self._handle = _libgcrypt().open(_GCRY_IDS[name])
-        _libgcrypt().setkey(self._handle, key)
+        self._handle = lib.open(name)
+        lib.setkey(self._handle, key)
 
     def encrypt_block(self, block: bytes) -> bytes:
         if len(block) != BLOCK_SIZE:
             raise ValueError(f"block must be {BLOCK_SIZE} bytes, got {len(block)}")
-        return _libgcrypt().encrypt(self._handle, block)
+        lib = _libgcrypt()
+        if lib is None:  # pragma: no cover - already constructed
+            raise UnsupportedCipherError("libgcrypt disappeared")
+        return lib.encrypt(self._handle, block)
 
 
 # --------------------------------------------------------------------------
-# Pure-Python backend (optional, for portability)
+# Pure-Python backend
 # --------------------------------------------------------------------------
-def _pure_python_cipher(name: str, key: bytes) -> BlockCipher | None:
-    """Return a pure-Python cipher if one has been registered, else ``None``.
+# --------------------------------------------------------------------------
+# Re-export the pure-Python implementation surface
+# --------------------------------------------------------------------------
+from pkt_core.crypto.ciphers_pure import (  # noqa: E402,F401
+    CAST256,
+    CIPHERS,
+    KEY_SIZES,
+    CipherRegistry,
+    Serpent,
+    Twofish,
+)
 
-    Kept as a late import so this module works with or without the pure-Python
-    implementations present.
-    """
-    import importlib
 
+def _pure_cipher(name: str, key: bytes) -> BlockCipher | None:
+    """Return a pure-Python cipher, or ``None`` if this name is unsupported."""
     try:
-        pure = importlib.import_module("pkt_core.crypto.ciphers_pure")
-    except ImportError:
+        from pkt_core.crypto import ciphers_pure as pure
+    except ImportError:  # pragma: no cover - optional module
         return None
-    factory: Callable[[bytes], BlockCipher] | None = getattr(pure, name, None)
-    if factory is None:
+    registry: dict[str, Callable[[bytes], BlockCipher]] | None = getattr(
+        pure, "CIPHERS", None
+    )
+    if not registry or name not in registry:
         return None
-    return factory(key)
+    return registry[name](key)
 
 
 def get_cipher(name: str, key: bytes) -> BlockCipher:
     """Construct the named block cipher.
 
-    Preference order: pure-Python (portable, self-contained) then libgcrypt.
+    Preference order: pure Python (portable, and the only source of CAST-256),
+    then ``libgcrypt`` where it covers the algorithm.
 
     Args:
         name: ``"twofish"``, ``"serpent128"``, ``"serpent256"``, ``"cast256"``…
@@ -202,11 +245,11 @@ def get_cipher(name: str, key: bytes) -> BlockCipher:
     if len(key) not in CIPHER_KEY_SIZES[name]:
         raise ValueError(f"{name} does not accept a {len(key)}-byte key")
 
-    impl = _pure_python_cipher(name, key)
+    impl = _pure_cipher(name, key)
     if impl is not None:
         return impl
 
-    if name in _GCRY_IDS:
+    if name in _GCRY_NAMES:
         return LibgcryptCipher(name, key)
 
     raise UnsupportedCipherError(
@@ -215,14 +258,18 @@ def get_cipher(name: str, key: bytes) -> BlockCipher:
     )
 
 
+def encrypt_block(name: str, key: bytes, block: bytes) -> bytes:
+    """One-shot convenience: encrypt a single block."""
+    return get_cipher(name, key).encrypt_block(block)
+
+
 def cipher_available(name: str) -> bool:
     """Whether this build can actually provide the named cipher."""
-    try:
-        probe = b"\x00" * CIPHER_KEY_SIZES[name][0]
-    except (KeyError, IndexError):
+    sizes = CIPHER_KEY_SIZES.get(name)
+    if not sizes:
         return False
     try:
-        get_cipher(name, probe)
+        get_cipher(name, b"\x00" * sizes[0])
     except (UnsupportedCipherError, ValueError):
         return False
     return True

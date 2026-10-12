@@ -80,24 +80,36 @@ _g.gcry_cipher_open.argtypes = [ctypes.POINTER(ctypes.c_void_p), ctypes.c_int, c
 _g.gcry_cipher_setkey.argtypes = [ctypes.c_void_p, ctypes.c_char_p, ctypes.c_size_t]
 _g.gcry_cipher_encrypt.argtypes = [ctypes.c_void_p, ctypes.c_char_p, ctypes.c_size_t, ctypes.c_char_p, ctypes.c_size_t]
 
+# NOTE: libgcrypt 1.12 renumbered its static cipher ids (SERPENT128/192/256 are
+# now 304/305/306, not 12/13/14; TWOFISH128 is 303).  Never hard-code them --
+# resolve through gcry_cipher_map_name at runtime instead.
+_g.gcry_cipher_map_name.restype = ctypes.c_int
+_g.gcry_cipher_map_name.argtypes = [ctypes.c_char_p]
+
 _GCRY_ECB = 1
-_CIPHER_IDS = {"twofish": 10, "serpent128": 12, "serpent192": 13, "serpent256": 14, "aes": 7}
+_CIPHER_NAMES = ("twofish", "serpent128", "serpent192", "serpent256", "aes")
+
+
+def _cipher_id(name):
+    """Resolve a cipher name to this libgcrypt build's id (0 = unavailable)."""
+    return int(_g.gcry_cipher_map_name(name.encode("ascii")))
 
 
 def cipher_available(name):
     """True if this libgcrypt build can open the named block cipher."""
-    cid = _CIPHER_IDS.get(name)
-    if cid is None:
+    cid = _cipher_id(name)
+    if not cid:
         return False
     h = ctypes.c_void_p()
     return _g.gcry_cipher_open(ctypes.byref(h), cid, _GCRY_ECB, 0) == 0
 
 
 def _block_cipher(name, key):
-    try:
-        cid = _CIPHER_IDS[name]
-    except KeyError as exc:
-        raise PacketTracerError(f"unsupported cipher {name!r}") from exc
+    cid = _cipher_id(name)
+    if not cid:
+        raise PacketTracerError(
+            f"unsupported cipher {name!r} in this libgcrypt build"
+        )
     h = ctypes.c_void_p()
     if _g.gcry_cipher_open(ctypes.byref(h), cid, _GCRY_ECB, 0) != 0:
         raise PacketTracerError("gcry_cipher_open failed")
