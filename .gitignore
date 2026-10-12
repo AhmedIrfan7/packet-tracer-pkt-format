@@ -1,6 +1,28 @@
 __pycache__/
-*.pyc
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.venv/
+.mypy_cache/
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Packet Tracer sample binaries are deliberately NOT committed.
+# See corpus/README.md — the corpus is reproduced by corpus/fetch_corpus.py,
+# pinned by SHA-256 in corpus/CORPUS_INDEX.tsv.
 *.pkt
 *.pka
 *.xml
 !tools/*.xml
+
+# The only container files shipped are self-authored, GPL samples.
+!corpus/samples/*.pkt
+!corpus/samples/*.pka
+
+# Harvested third-party corpus (bulk) and scratch trees are never committed.
+corpus/internet/
+corpus/_work/
+corpus/files/

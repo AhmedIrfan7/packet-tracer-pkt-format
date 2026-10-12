@@ -1,23 +1,44 @@
 [build-system]
-requires = ["setuptools>=61"]
+requires = ["setuptools>=68", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "pt9-format"
-version = "1.0.0"
-description = "Read/write codec for the Cisco Packet Tracer 9 .pkt/.pka container format"
+name = "pkt-core"
+version = "0.2.0"
+description = "Type-safe reader/writer for Cisco Packet Tracer .pkt/.pka containers, plus a reverse-engineering reference codec"
 readme = "README.md"
-requires-python = ">=3.8"
+requires-python = ">=3.10"
 license = { text = "GPL-3.0-or-later" }
-keywords = ["packet-tracer", "cisco", "file-format", "twofish", "eax", "reverse-engineering"]
+authors = [{ name = "aacanadaa" }]
+keywords = ["packet-tracer", "pkt", "pka", "cisco", "file-format", "twofish", "eax", "reverse-engineering"]
 classifiers = [
-  "Programming Language :: Python :: 3",
+  "Development Status :: 3 - Alpha",
+  "Intended Audience :: Developers",
   "License :: OSI Approved :: GNU General Public License v3 or later (GPLv3+)",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.14",
   "Topic :: System :: Networking",
 ]
 
+[project.optional-dependencies]
+dev = ["pytest>=7.4", "pytest-cov>=4.1", "mypy>=1.8", "hypothesis>=6.90"]
+
 [project.scripts]
+pkt = "pkt_core.cli.main:main"
 pt9 = "pt9:main"
 
 [tool.setuptools]
 py-modules = ["pt9"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.mypy]
+strict = true
+python_version = "3.10"
+warn_unreachable = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q --strict-markers"
