@@ -34,9 +34,12 @@ an authenticated-encryption layer. There are two document kinds:
 | `PACKETTRACER_ACTIVITY` | `.pka` | Scored activity with the **PT 4.x** document schema (legacy family only) |
 
 The `PACKETTRACER*` → `PACKETTRACER5*` rename happened at **PT 4.2**, not 5.0.
-Activity documents wrap the network document in a second `<PACKETTRACER*>`
-element and add a `<VARIABLE_MANAGER>` (present in 100% of activities, 0% of
-labs, in both families).
+Activity documents nest the network document in **one or more**
+`<PACKETTRACER5>` children — measured at ~3 per activity across 447 activity
+documents (1,341 nested occurrences), plausibly the live / initial / comparison
+copies — and add a `<VARIABLE_MANAGER>` (present in 100% of activities, 0% of
+labs, in both families). PT 4.x nests `<PACKETTRACER>` instead (192 times in
+64 documents).
 
 **The container is independent of the root element.** `PACKETTRACER5` and
 `PACKETTRACER5_ACTIVITY` both occur in *both* container families, so the root

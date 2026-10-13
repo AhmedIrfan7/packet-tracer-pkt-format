@@ -287,8 +287,12 @@ class ScoringNode(PktNode):
     bulk of the element-name frequency in a scored document comes from.
     """
 
+    # NB: ``CHECK_TYPE`` is deliberately absent. Scoring criteria live as the
+    # *attribute* ``checkType`` on ``<NAME>`` (6.0M occurrences in the corpus),
+    # not as a child element. Listing it here would invent an element that does
+    # not exist and overstate element coverage.
     _claimed: ClassVar[frozenset[str]] = frozenset(
-        {"NODE", "ID", "POINTS", "COMPONENTS", "NAME", "VALUE", "CHECK_TYPE"}
+        {"NODE", "ID", "POINTS", "COMPONENTS", "NAME", "VALUE"}
     )
 
     @property

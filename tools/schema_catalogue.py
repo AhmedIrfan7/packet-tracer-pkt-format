@@ -32,7 +32,7 @@ from pkt_core import decode_bytes  # noqa: E402
 
 
 class Node:
-    __slots__ = ("name", "parents", "count", "docs", "attrs", "has_text", "has_kids")
+    __slots__ = ("name", "parents", "count", "docs", "attrs", "has_text", "has_cdata", "has_kids")
 
     def __init__(self, name: str) -> None:
         self.name = name
@@ -41,6 +41,7 @@ class Node:
         self.docs: set[str] = set()
         self.attrs: collections.Counter[str] = collections.Counter()
         self.has_text = False
+        self.has_cdata = False
         self.has_kids = False
 
 
@@ -70,6 +71,7 @@ def scan(data: bytes, doc_id: str, nodes: dict[str, Node], family: str) -> None:
             if stack:
                 nd = nodes.get(stack[-1])
                 if nd:
+                    nd.has_cdata = True
                     nd.has_text = True
             i = end
             continue
@@ -128,6 +130,12 @@ def scan(data: bytes, doc_id: str, nodes: dict[str, Node], family: str) -> None:
                 if raw:
                     attrs.append(raw.decode("utf-8", "replace"))
             k += 1
+
+        # ordinary character data between this tag and the next is text too
+        if stack and lt > i:
+            prev = nodes.get(stack[-1])
+            if prev and any(0x20 <= b < 0x7F or b in (0x09, 0x0A, 0x0D) for b in data[i:lt]):
+                prev.has_text = True
 
         self_closing = data[lt : k + 1].rstrip(b">").endswith(b"/")
         nd = nodes.get(name)
@@ -207,6 +215,7 @@ def main(argv: list[str] | None = None) -> int:
             "parents": dict(nd.parents.most_common(8)),
             "attributes": dict(nd.attrs.most_common(12)),
             "has_text": nd.has_text,
+            "has_cdata": nd.has_cdata,
             "has_element_children": nd.has_kids,
             "modelled": nd.name in typed,
         })
