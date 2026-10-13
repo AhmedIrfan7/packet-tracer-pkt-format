@@ -240,5 +240,3 @@ Free for non-commercial use. If you want to use this commercially, open an
 issue and we will talk about a commercial licence.
 
 > Creative Commons licences are not used here on purpose: CC themselves advise
-> against them for software. GPL-3.0-or-later is purpose-built for code
-> and makes the non-commercial term unambiguous.
