@@ -254,6 +254,32 @@ def _name_at(data: bytes, start: int) -> str:
     return data[start + 1 : i].decode("utf-8", "replace") or "?"
 
 
+def _find_declaration_end(data: bytes, start: int) -> int:
+    """End of a ``<!...>`` construct begun at ``data[start] == '<'``.
+
+    CDATA sections and comments may legally contain ``>``, so scanning for the
+    first ``>`` is wrong and silently truncates the construct mid-content.
+    Packet Tracer stores activity instructions as CDATA HTML that is full of
+    ``>`` (``<![CDATA[<h3>Task</h3>...]]>``), so this has to be exact:
+
+    * ``<![CDATA[ ... ]]>&`` ends at the first ``]]>``
+    * ``<!-- ... -->`` ends at the first ``-->``
+    * a DOCTYPE/PI ends at the first ``>`` outside a quoted value
+    """
+    n = len(data)
+    if data[start : start + 9] == b"<![CDATA[":
+        end = data.find(b"]]>", start + 9)
+        if end < 0:
+            raise FormatError(f"unterminated CDATA section at offset {start}")
+        return end + 2
+    if data[start : start + 4] == b"<!--":
+        end = data.find(b"-->", start + 4)
+        if end < 0:
+            raise FormatError(f"unterminated comment at offset {start}")
+        return end + 2
+    return _find_tag_end(data, start)
+
+
 def _find_tag_end(data: bytes, start: int) -> int:
     """Index of the ``>`` closing the tag begun at ``data[start] == '<'``.
 
@@ -378,7 +404,7 @@ def _parse_element(data: bytes, pos: int) -> tuple[XmlElement, int]:
             return elem, lt
 
         if data[lt : lt + 2] in (b"<?", b"<!"):
-            tag_end = _find_tag_end(data, lt)
+            tag_end = _find_declaration_end(data, lt)
             elem.children.append(XmlText(data=data[lt : tag_end + 1]))
             cursor = tag_end + 1
             text_start = cursor
@@ -415,7 +441,7 @@ def parse_xml_bytes(data: bytes) -> XmlDocument:
         if lt < 0:
             raise FormatError("no element found in document")
         if data[lt : lt + 2] in (b"<?", b"<!"):
-            pos = _find_tag_end(data, lt) + 1
+            pos = _find_declaration_end(data, lt) + 1
             continue
         return XmlDocument(data=data, root_start=lt)
 

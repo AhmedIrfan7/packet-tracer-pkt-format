@@ -524,3 +524,64 @@ def test_setters_work_on_a_device_without_workspace() -> None:
     lab.devices[0].set_position(10, 20)
     again = Lab.from_bytes(lab.to_xml())
     assert again.devices[0].position == (10.0, 20.0)
+
+
+# --------------------------------------------------------------------------
+# Scored activities: password and sections live in non-obvious places
+# --------------------------------------------------------------------------
+ACTIVITY_FULL = """<PACKETTRACER5_ACTIVITY>
+ <VERSION>9.0.1.0858</VERSION>
+ <PACKETTRACER5>
+  <NETWORK><DEVICES><DEVICE><ENGINE>
+   <TYPE model="2911" customModel="">Router</TYPE>
+   <NAME translate="true">R1</NAME><POWER>true</POWER>
+  </ENGINE></DEVICE></DEVICES></NETWORK>
+ </PACKETTRACER5>
+ <COMPARISONS><NODE><ID>Network</ID><NAME>Network</NAME></NODE></COMPARISONS>
+ <LOCKINGTREE><NODE><ID>Root</ID><NAME>Root</NAME></NODE></LOCKINGTREE>
+ <ACTIVITY COUNTDOWNLEFT="0" COUNTDOWNMS="0" ELAPSED="0" ENABLED="no" PASS="hunter2" TIMERTYPE="0">
+  <INSTRUCTIONS>
+   <PAGE translate="true" tabify="0" title=""><![CDATA[<h3>Task</h3><br><ul><li>step</ul>]]></PAGE>
+  </INSTRUCTIONS>
+ </ACTIVITY>
+</PACKETTRACER5_ACTIVITY>"""
+
+
+def test_activity_password_is_an_attribute_not_an_element() -> None:
+    """Stored as <ACTIVITY PASS="..."> - OPTIONS/PASS is a different thing."""
+    lab = Lab.from_bytes(ACTIVITY_FULL.encode("utf-8"))
+    assert lab.activity_password == "hunter2"
+    # the OPTIONS/PASS path must not be what answers this
+    assert lab.options is None or lab.options.password == ""
+
+
+def test_activity_sections_include_instructions_nested_under_ACTIVITY() -> None:
+    """INSTRUCTIONS lives inside <ACTIVITY>, not at the root."""
+    lab = Lab.from_bytes(ACTIVITY_FULL.encode("utf-8"))
+    tags = {s.tag for s in lab.activity_sections}
+    assert "COMPARISONS" in tags
+    assert "LOCKINGTREE" in tags
+    assert "INSTRUCTIONS" in tags, f"missing INSTRUCTIONS; saw {tags}"
+
+
+def test_instructions_cdata_is_preserved_verbatim() -> None:
+    lab = Lab.from_bytes(ACTIVITY_FULL.encode("utf-8"))
+    section = next(s for s in lab.activity_sections if s.is_instructions)
+    html = section.instructions_html
+    assert b"<![CDATA[" in html, "CDATA wrapper must survive"
+    assert b"<h3>Task</h3>" in html
+    assert b"<br>" in html and b"<ul>" in html
+
+
+def test_set_activity_password_mutates_and_roundtrips() -> None:
+    lab = Lab.from_bytes(ACTIVITY_FULL.encode("utf-8"))
+    lab.set_activity_password("s3cret")
+    again = Lab.from_bytes(lab.to_xml())
+    assert again.activity_password == "s3cret"
+    assert again.to_xml() == lab.to_xml()
+
+
+def test_activity_password_absent_on_plain_lab() -> None:
+    lab = Lab.from_bytes(b"<PACKETTRACER5><VERSION>9</VERSION></PACKETTRACER5>")
+    assert lab.activity_password == ""
+    assert lab.activity_sections == []

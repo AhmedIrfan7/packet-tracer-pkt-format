@@ -264,13 +264,44 @@ class Lab(PktNode):
 
     @property
     def activity_sections(self) -> list[ActivitySection]:
-        """Named sections of a scored activity (absent in plain labs)."""
+        """Named sections of a scored activity (absent in plain labs).
+
+        Scored activities do not keep these as root children: ``COMPARISONS``,
+        ``INITIALSETUP`` and ``LOCKINGTREE`` sit at the root, but
+        ``INSTRUCTIONS``, ``INSTRUCTION_DIALOG``, ``USER_NOTES`` and
+        ``VARIABLE_MANAGER`` are nested inside ``<ACTIVITY>``. A direct-child
+        lookup therefore reports an activity with no instructions at all.
+        """
+        wanted = (
+            "COMPARISONS", "INITIALSETUP", "LOCKINGTREE",
+            "INSTRUCTIONS", "INSTRUCTION_DIALOG", "USER_NOTES", "VARIABLE_MANAGER",
+        )
         out: list[ActivitySection] = []
-        for tag in ("COMPARISONS", "INITIALSETUP", "LOCKINGTREE", "INSTRUCTIONS", "VARIABLE_MANAGER"):
+        seen: set[int] = set()
+        for tag in wanted:
             node = self._el.find(tag)
-            if node is not None:
+            if node is None:
+                for desc in self._el.iter_elements():
+                    if desc.tag == tag:
+                        node = desc
+                        break
+            if node is not None and id(node) not in seen:
+                seen.add(id(node))
                 out.append(ActivitySection.from_element(node))
         return out
+
+    @property
+    def activity_password(self) -> str:
+        """The activity-wizard password.
+
+        Stored as the ``PASS`` **attribute** of ``<ACTIVITY>``, not as an
+        ``<OPTIONS><PASS>`` element - reading the element finds nothing even
+        when a password is set.
+        """
+        node = self._el.find("ACTIVITY")
+        if node is None:
+            return ""
+        return node.get("PASS") or ""
 
     @property
     def scoring_tree(self) -> list[ScoringNode]:
@@ -279,6 +310,15 @@ class Lab(PktNode):
             if section.tag == "COMPARISONS":
                 return section.nodes
         return []
+
+    def set_activity_password(self, value: str) -> None:
+        """Set the activity-wizard password (``<ACTIVITY PASS="...">``)."""
+        node = self._el.find("ACTIVITY")
+        if node is None:
+            node = XmlElement(name=b"ACTIVITY")
+            self._el.append(node)
+        node.set("PASS", value)
+        self._el._dirty = True
 
     # -- serialization ----------------------------------------------------
     def to_xml(self) -> bytes:
