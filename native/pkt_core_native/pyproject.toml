@@ -18,7 +18,7 @@ authors = [{ name = "pkt-core contributors" }]
 classifiers = [
   "Programming Language :: Rust",
   "Programming Language :: Python :: Implementation :: CPython",
-  "License :: OSI Approved :: GNU General Public License v3 or later (GPLv3+)",
+  "License :: OSI Approved :: GNU General Public License v3.0 or later (GPLv3+)",
 ]
 
 [tool.maturin]

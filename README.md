@@ -6,8 +6,8 @@
 > modules, cabling, IOS config, PC IPs, instructions, the activity-wizard password,
 > and the scoring tree — straight to a file PT opens.
 
-[![License: GPL v3](https://img.shields.io/badge/license-GPLv3-blue.svg)](LICENSE)
-[![Python 3.8+](https://img.shields.io/badge/python-3.8%2B-blue.svg)](https://www.python.org/)
+[![License: GPL-3.0-or-later](https://img.shields.io/badge/license-GPLv3-blue.svg)](LICENSE)
+[![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/)
 [![No Packet Tracer needed](https://img.shields.io/badge/Packet_Tracer-not_required-32d74b.svg)](#quickstart)
 [![Cisco Packet Tracer](https://img.shields.io/badge/Cisco_Packet_Tracer-1BA0D7?style=flat&logo=cisco&logoColor=white)](#status--scope)
 
@@ -230,4 +230,11 @@ Key facts for anyone generating files (details in the scene-graph notes):
 
 ## License
 
-GNU General Public License v3.0 or later (GPL-3.0-or-later) — see [LICENSE](LICENSE).
+**GNU General Public License v3.0 or later** — see [LICENSE](LICENSE).
+
+Free for non-commercial use. If you want to use this commercially, open an
+issue and we will talk about a commercial licence.
+
+> Creative Commons licences are not used here on purpose: CC themselves advise
+> against them for software. GPL-3.0-or-later is purpose-built for code
+> and makes the non-commercial term unambiguous.
