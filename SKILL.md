@@ -1,174 +1,203 @@
 ---
 name: packet-tracer-pkt-format
-description: >-
-  Build Packet Tracer labs WITHOUT Packet Tracer: read/write Cisco Packet Tracer 9
-  `.pkt` / `.pka` files and generate complete, scored activities offline. Use when decoding a `.pkt`/`.pka`
-  to XML, building a lab (place devices, install modules, power on/off, cable
-  copper/serial, write IOS config and PC IPs), authoring an activity (`.pka`)
-  with instructions, the activity-wizard password, permissions and a scoring
-  tree, or extending the shipped device/module/scoring libraries.
-license: GPL-3.0-or-later
+description: Read, author, modify and re-serialise Cisco Packet Tracer .pkt labs and scored .pka activities entirely offline. Covers both container families (PT 4.1 through 9.0.1), a byte-exact codec, a typed Python model, and generators for full topologies and graded activities. Use when a task involves opening, inspecting, diffing, editing or creating Packet Tracer files.
 ---
 
 # packet-tracer-pkt-format
 
-A Python toolkit that **fully decodes and re-encodes** the Cisco Packet Tracer 9
-`.pkt`/`.pka` container and lets you **generate complete labs and scored
-activities without opening Packet Tracer**.
-
-Repository: <https://github.com/aacanadaa/packet-tracer-pkt-format>
+Everything here is **offline**. Packet Tracer is only needed to *open* a result,
+never to build one.
 
 ## When to use this skill
 
-Use it whenever the task involves Packet Tracer *files* rather than the GUI:
+- Build a network lab (`.pkt`) from code or a JSON spec
+- Build a **scored activity** (`.pka`) with instructions, grading and a wizard password
+- Read / inspect / diff / edit existing Packet Tracer files
+- Convert a topology to graphviz, netbox or containerlab
+- Reverse-engineer something about the file format
 
-- Decode a `.pkt`/`.pka` to its XML (inspect, diff, grep, archive, grade).
-- Generate or modify a lab: devices, modules, power, cabling, IOS config, PC IPs.
-- Author an **activity** (`.pka`): instructions, password, permissions, scoring,
-  initial + answer networks — offline.
-- Extend the shipped device/module/scoring libraries from your own files.
+## The container — know this before touching any file
 
-Do **not** use it to tamper with someone else's assessment/answer keys.
+There is **no magic header**. Detection is verifier-based (an AEAD tag), never a
+prefix match. Two families:
 
-## The container (what a `.pkt` is)
+| Family | Written by | Transform | Verified |
+| --- | --- | --- | --- |
+| modern | PT **5.3.3** → 9.0.1 | layer A → Crypto++ EAX (Twofish) → layer B → qCompress | 865 files |
+| legacy | PT **4.1** → 5.3.2 | layer B → qCompress *(no AEAD, no reversal)* | 193 files |
 
-```
-file bytes
-  -> reverse + XOR (n*(1-i))            # outer scramble
-  -> Twofish-EAX (key 0x89*16, iv 0x10*16) + 16-byte tag   # Util::decryptPTSave
-  -> XOR (len-i)                        # Util::deobfuscateBytes
-  -> qCompress (4-byte BE length + zlib)
-  -> UTF-8 XML  "<PACKETTRACER5>…"  (or "<PACKETTRACER5_ACTIVITY>…" for .pka)
-```
+The switchover is **5.3.2 → 5.3.3**, not 5.x → 6.0. `encode(decode(f)) == f`
+byte-for-byte on **1058/1058** real containers.
 
-Read/write is **byte-exact** (`encode(decode(f)) == f`). Other formats use
-Serpent/CAST256 with different key/IV bytes. Full spec in `FORMAT.md`.
+Three root elements exist — `PACKETTRACER5` (lab), `PACKETTRACER5_ACTIVITY`
+(scored activity), `PACKETTRACER_ACTIVITY` (PT 4.x scored). **The root element is
+not a container discriminator.**
+
+**Documents are not always well-formed XML.** `<LINE>` IOS config carries raw
+control bytes (the Cisco `banner motd ^C…^C` delimiter is a literal `0x03`),
+PT 4.1 docs end with a trailing NUL, and activity instructions are **CDATA HTML**
+that contains `>`. Do not use a validating parser.
 
 ## Requirements
 
-- Python 3.8+
-- `libgcrypt` (block-cipher primitive only): `apt install libgcrypt20`
-- No Packet Tracer required.
+Python 3.10+. Optional: `libgcrypt` (faster), Rust accelerator (fastest).
+Nothing is required to author a file.
 
-## Quickstart
+## The two APIs — pick by task
 
-```console
-$ pip install .                       # gives the `pt9` CLI (optional)
-$ python3 pt9.py info   lab.pkt       # decrypt + summarise
-$ python3 pt9.py decode lab.pkt -o lab.xml
-$ python3 pt9.py encode lab.xml -o lab.pkt
-```
-
-## Tools
-
-| Tool | Purpose |
-| --- | --- |
-| `pt9.py` | decode/encode `.pkt`/`.pka` ↔ XML (byte-exact) |
-| `tools/lab_api.py` | `Lab()`: `add_device` (config, pc_ip, power, `install` module), `install_module`, `link` (copper/serial), `set_os`, `set_config_register`, `save`; `load_templates` |
-| `tools/build_configured_lab.py` | `PC-SW-R-R-SW-PC` with IPs, gateways, static routes, long configs |
-| `tools/build_wired_lab.py` | merge one device/model + auto-cable to a switch backbone |
-| `tools/harvest_merge.py` | merge devices from many `.pkt` into one canvas |
-| `tools/activity.py` | author `.pka`: instructions, password, timer, permissions, feedback, initial/answer networks, scoring |
-| `tools/scoring.py` | build `INITIALSETUP`/`COMPARISONS`; `from_shapes`, `from_template`, `derive_values` |
-| `tools/make_scored_lab.py` | **one-shot offline** generator: topology spec → scored `.pka` |
-| `tools/harvest_library.py` | (re)build `device_templates.json` / `device_shapes.json` |
-
-Shipped libraries: `tools/device_templates.json` (137 models, 78 modules),
-`tools/device_shapes.json` (14 scoring shapes), `tools/network_seed.xml`,
-`tools/activity_skeleton.xml`.
-
-## Workflow A — decode / inspect
+### 1. `src/pkt_core/` — read, inspect, modify
 
 ```python
-import pt9
-xml = pt9.decode("lab.pkt", "pkt")          # -> bytes of XML
-open("lab.xml","wb").write(xml)
-pt9.encode("out.pkt", xml, "pkt")           # byte-exact round-trip
+from pkt_core import decode, decode_bytes, encode_bytes, Lab   # Lab re-exported below
+from pkt_core.models import Lab
+
+lab = Lab.from_bytes(decode("lab.pkt").xml)     # format auto-detected
+lab.version, lab.root_tag, lab.is_activity
+lab.devices, lab.links, lab.clusters, lab.options
+lab.activity_password                          # <ACTIVITY PASS="..."> attribute!
+lab.activity_sections                          # COMPARISONS/INITIALSETUP/LOCKINGTREE/INSTRUCTIONS
+
+for d in lab.devices:
+    d.name, d.kind, d.model, d.position, d.cluster_id
+    d.ports                                     # flattened across modules/slots
+    d.details                                   # sys contact/location, serial, coords
+    d.port_configs                              # IP/DHCP/DNS/VLAN
+    d.wireless, d.files
+
+lab.set_activity_password("newpass")
+lab.devices[0].set_name("CORE-R1")             # writes to ENGINE/NAME, correctly
+lab.devices[0].set_position(123, 456)
+
+out = encode_bytes(lab.to_xml(), "pkt")        # byte-exact for unmodified docs
 ```
 
-## Workflow B — build a network (offline)
+CLI: `pkt info | unpack | pack | diff | export`.
+`pkt unpack` emits XML + container metadata + per-device IOS configs + a topology graph.
+
+Models are **views over a lossless tree**: untouched bytes are emitted verbatim,
+so data loss is impossible. Unrecognised elements surface in `extra_fields`.
+
+### 2. `tools/lab_api.py` — author from scratch
 
 ```python
+import sys; sys.path.insert(0, "tools"); sys.path.insert(0, ".")
 import lab_api
+
 models, modules = lab_api.load_templates("tools/device_templates.json")
 lab = lab_api.Lab("tools/network_seed.xml", models, modules)
+
+lab.prune_seed_devices()        # <-- DO THIS unless you want the seed devices
 r  = lab.add_device("2911", "R1", 250, 350, install="HWIC-2T",
-                    ios_config=["interface GigabitEthernet0/0",
-                                " ip address 192.168.1.1 255.255.255.0", " no shutdown", "end"])
+                    ios_config=["hostname R1",
+                                "interface GigabitEthernet0/0",
+                                " ip address 192.168.1.1 255.255.255.0",
+                                " no shutdown", "end"])
 sw = lab.add_device("2960-24TT", "SW1", 450, 350)
-pc = lab.add_device("PC-PT", "PC1", 650, 350, pc_ip=("192.168.1.10","255.255.255.0","192.168.1.1"))
+pc = lab.add_device("PC-PT", "PC1", 650, 350,
+                    pc_ip=("192.168.1.10", "255.255.255.0", "192.168.1.1"))
 lab.link(r, "GigabitEthernet0/0", sw, "GigabitEthernet0/1")
 lab.link(sw, "FastEthernet0/1", pc, "FastEthernet0")
 lab.save("lab.pkt")
 ```
 
-## Workflow C — a full scored activity, no Packet Tracer
+## PITFALL — device names collide with the seed
+
+`network_seed.xml` ships **7 pre-existing devices**:
+
+```
+Server   Power Distribution Device0   PC-B   PC-A   SW1   R2   R1
+```
+
+`add_device("2960-24TT", "SW1", …)` **raises ValueError** by default. This is
+deliberate — silently renaming hides authoring bugs. Either:
+
+- `lab.prune_seed_devices()` first (returns the removed names, idempotent), or
+- pick names outside that set, or
+- `on_name_conflict="suffix"` to opt into `SW1` → `SW1(1)`.
+
+`lab.device_names()` lists what is taken. Note: device `<NAME>` lives under
+`<ENGINE>`, not as a direct child of `<DEVICE>`.
+
+## Workflow — a full scored activity (`.pka`)
 
 ```console
-$ python3 tools/make_scored_lab.py --out mylab.pka --password hunter2 \
-      --spec topology.json --instructions "<h3>Task</h3><p>…</p>"
+$ python3 tools/make_scored_lab.py --out mylab.pka --spec topology.json \\
+      --password hunter2 --prune-seed --feedback "Lab complete - well done!"
 ```
 
-`topology.json`:
-```json
-{"devices":[{"model":"2911","name":"R9","x":250,"y":350,"install":"HWIC-2T",
-             "config":["interface GigabitEthernet0/0"," ip address 192.168.9.1 255.255.255.0"," no shutdown"]},
-            {"model":"2960-24TT","name":"SW9","x":450,"y":350},
-            {"model":"PC-PT","name":"PC9","x":650,"y":350,
-             "pc_ip":["192.168.9.10","255.255.255.0","192.168.9.1"]}],
- "links":[{"a":"R9","aport":"GigabitEthernet0/0","b":"SW9","bport":"GigabitEthernet0/1"},
-          {"a":"SW9","aport":"FastEthernet0/1","b":"PC9","bport":"FastEthernet0"}]}
-```
+Spec is JSON: `{"devices":[{"model","name","x","y","install","config":[...],"pc_ip":[...]}],
+"links":[{"a","aport","b","bport"}], "instructions": "<h3>Task</h3>..."}`.
+`instructions` accepts a string or a list of pages.
 
-Or assemble it piecewise with `activity.Activity` + `scoring.from_shapes`.
+It builds an **initial** network (topology, no config) and an **answer** network
+(config applied), and derives the scoring tree from the answer. Output verified
+in Packet Tracer 9.0.1: opens as a real activity, timer runs, `Check Results`
+runs the grading engine.
 
-## Key facts (learned by RE — do not relearn)
+**The wizard password is the `PASS` attribute of `<ACTIVITY>`, not
+`<OPTIONS><PASS>`.** `pkt_core.models.Lab.activity_password` reads the right one.
 
-- **Load requirements**: unique `<ENGINE>/<SAVE_REF_ID>` per device; unique
-  `MACADDRESS`/`BIA` per port; a valid `<PHYSICAL>` scene placement; every link
-  endpoint resolves (id + an existing port name).
-- **IOS config** = `<ENGINE><RUNNINGCONFIG><LINE>cmd</LINE>…`, applied on load.
-  Long configs (hundreds of lines) are fine.
-- **PC/Server IP** = NIC `<PORT><IP>/<SUBNET>/<PORT_GATEWAY>/<PORT_DHCP_ENABLE>`.
-- **Modules**: fill an empty `<SLOT><TYPE>eInterfaceCard</TYPE>` with a
-  `<MODULE><TYPE>eInterfaceCard</TYPE><MODEL>…</MODEL><PORT>…` subtree; interface
-  names follow the bay (HWIC-2T in bay `0/0` → `Serial0/0/0`).
-- **Cables**: `<LINK><TYPE>` (before `<CABLE>`); copper = `eCopper` +
-  `eStraightThrough`; serial = `eSerial` + `DCEDEV`/`DCEPORT`. The `*_MEM_ADDR`
-  values are **not** validated (PT rebinds by id + port).
-- **Power**: `<ENGINE><POWER>true|false>`.
-- **Physical placement** is synthesised: each device gets a fresh
-  `<PHYSICALWORKSPACE>` leaf (`<TYPE>6</TYPE>`) and a `<PHYSICAL_CPUR>`; the leaf
-  GUID in `<PHYSICAL>` must be **braced**.  `drop_initial()` also removes the
-  seed devices' leaves and their links (orphans/dangling links corrupt the file).
-- **Wireless** devices associate by SSID at runtime — no `<LINK>`.  Use
-  `Lab.set_wireless(dev, ssid, auth_type, encrypt_type, password=…)`.
-- **Activity (`.pka`)** root is `<PACKETTRACER5_ACTIVITY>` and embeds three
-  networks: [0] current, [1] initial, [2] answer. `<ACTIVITY PASS="…">` is the
-  activity-wizard password; `<INSTRUCTIONS>` holds HTML pages; scoring lives in
-  parallel `<INITIALSETUP>` / `<COMPARISONS>` node trees.
-- **Scoring** must be **complete** device nodes cloned from a real activity
-  (minimal hand-made nodes are rejected) — use `scoring.from_shapes` /
-  `from_template`.
+## Other tools
 
-## Extending the libraries
+| Tool | Use |
+| --- | --- |
+| `tools/build_large_topology.py` | 3-tier campus: core/distribution/access/servers/wireless/IoT, real IOS configs. `--clients N`, `--prune-seed` |
+| `tools/build_configured_lab.py` | PC-SW-R-R-SW-PC with IPs, static routes |
+| `tools/build_wired_lab.py` | auto-cable devices to a switch backbone |
+| `tools/activity.py` | lower-level `.pka` authoring (instructions, timer, permissions, feedback) |
+| `tools/scoring.py` | `INITIALSETUP`/`COMPARISONS`, `from_shapes`, `derive_values` |
+| `tools/harvest_library.py` | rebuild `device_templates.json` / `device_shapes.json` from saves |
+| `tools/legacy_probe.py` | standalone legacy-container probe |
+| `tools/bench_crypto_backends.py` | compare Rust / libgcrypt / pure Python |
 
-```console
-$ python3 tools/harvest_library.py --saves /opt/pt/saves --activities ./my_labs \
-      --out-models tools/device_templates.json --out-shapes tools/device_shapes.json
-```
+Shipped libraries: `tools/device_templates.json` (137 models, 78 modules),
+`tools/device_shapes.json`, `tools/network_seed.xml`, `tools/activity_skeleton.xml`.
+
+## Crypto backends
+
+`pkt_core.crypto.ciphers.get_cipher(name, key)` tries **Rust → libgcrypt → pure
+Python**. Names: `twofish`, `serpent128/192/256`, `cast256`, `aes`.
+Knobs: `PKT_CORE_BACKEND=rust|gcrypt|pure`, `PKT_CORE_DISABLE_RUST=1`.
+CAST-256 is only available via Rust or pure Python — libgcrypt has no CAST-256.
+Per-format key/IV bytes are in `pkt_core.crypto.keys.FORMATS`.
+
+## Key facts learned by reverse engineering — do not relearn
+
+* No magic header in any generation. Detection is try-and-verify.
+* Layer A is `C[i] = F[n-1-i] ^ ((n*(1-i)) & 0xFF)`; layer B is `P[i] ^= (m-i)`.
+* Crypto++ EAX nonce is `CMAC_K(0^128 || IV)`, **not** `CMAC_K(IV)`; CTR is
+  big-endian full-width from `N`; the 16-byte tag is appended.
+* The key and IV are one byte repeated ×16, so the keystream is file-independent
+  and the container is deterministic.
+* libgcrypt 1.12 **renumbered** its cipher ids (Serpent = 304/305/306, not
+  12/13/14). Never hard-code them — use `gcry_cipher_map_name`.
+* Twofish `h()` applies the q-permutation **before** the per-word XOR; round keys
+  split the key into `M_e`/`M_o`. Both are invisible in zero-key test vectors.
+* Activities nest ~3 `<PACKETTRACER5>` children (live/initial/comparison copies).
+* `NODE` is overloaded: the activity grading tree **and** the physical-workspace
+  location tree share the name.
+
+## Documentation
+
+| File | Contents |
+| --- | --- |
+| `docs/FORMAT_SPECIFICATION.md` | both container families, full binary spec |
+| `docs/SCHEMA_REFERENCE.md` | all 1,285 XML element names |
+| `docs/LEGACY_FORMAT.md` | the PT 5.x reverse-engineering writeup |
+| `docs/CORPUS_VERIFICATION.md` | 1058/1058 byte-exact evidence |
+| `docs/PKA_GENERATION.md` | authoring scored activities |
+| `docs/LARGE_TOPOLOGY_TEST.md` | 77-device topology, generated and opened |
+| `docs/PACKET_TRACER_VALIDATION.md` | verified in PT 7.3.1 and 9.0.1 |
+
+Corpus: `corpus/CORPUS_INDEX.tsv` (SHA-256 manifest), `corpus/fetch_corpus.py`
+(rebuilds it), `corpus/samples/` (self-authored, shipped).
 
 ## Limitations
 
-- Scoring shapes cover 14 models (only activities contain scoring trees); models
-  without a shape are ungraded, not fatal.
-- Scoring correctness is spot-verified, not exhaustively validated.
-- Wireless placement + SSID config works (association not exercised headlessly);
-  clusters use the default root cluster; connectivity tests and scripted custom
-  grading are not authored.  Serial links are generated faithfully (PT renders
-  them like the reference answer key).  Headless PT does not exercise
-  partial-credit grading (the genuine reference activity also reports complete).
+`.pta` / `.pkc` / `sm` / `userapp` container flavours are specified
+(`pkt_core.crypto.keys.FORMATS`) but untested — no real samples exist.
+`pkt export` output has not been validated against live netbox/containerlab.
 
 ## License
 
-GPL-3.0-or-later. Interoperability tooling for your own files.
+GNU General Public License v3.0 or later. Free for non-commercial use.
