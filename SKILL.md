@@ -16,6 +16,38 @@ never to build one.
 - Convert a topology to graphviz, netbox or containerlab
 - Reverse-engineer something about the file format
 
+## Bootstrap — you may have only this file
+
+Clone, install, and confirm the toolchain works before authoring anything:
+
+```console
+$ git clone https://github.com/aacanadaa/packet-tracer-pkt-format.git
+$ cd packet-tracer-pkt-format
+$ python3 -m venv .venv && . .venv/bin/activate
+$ pip install -e . pytest hypothesis pydantic
+$ python -m pytest tests/ -q            # expect: 293 passed, 1 skipped
+```
+
+Optional but faster: `pip install pkt_core_native` gives the Rust cipher
+accelerator (~100x). `libgcrypt` is a further optional accelerator. **Neither is
+required** — the pure-Python path is complete.
+
+Sanity check that you are ready to author:
+
+```python
+from pkt_core import decode_bytes, encode_bytes        # codec works
+import sys; sys.path.insert(0, "tools"); sys.path.insert(0, ".")
+import lab_api                                          # authoring works
+models, modules = lab_api.load_templates("tools/device_templates.json")
+lab = lab_api.Lab("tools/network_seed.xml", models, modules)
+print(lab.device_names())   # 7 seed names - see the PITFALL section
+```
+
+If `decode_bytes` raises `UnsupportedCipherError`, you are missing `libgcrypt`
+and the pure-Python backends; reinstall with `pip install -e .` and check
+`python -c "from pkt_core.crypto.ciphers import available_ciphers; print(available_ciphers())"`
+which must include `twofish`.
+
 ## The container — know this before touching any file
 
 There is **no magic header**. Detection is verifier-based (an AEAD tag), never a
