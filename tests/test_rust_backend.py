@@ -388,11 +388,17 @@ def test_import_and_pure_path_work_without_rust_module() -> None:
     cipher path must not depend on the Rust module in any way.
     """
     script = _SUBPROCESS_SNIPPET.format(src=str(SRC_DIR))
+    # Drop any caller-supplied backend pin: this subprocess deliberately blocks
+    # the accelerator, so inheriting PKT_CORE_BACKEND=rust would be a
+    # contradiction rather than a meaningful assertion.
+    clean_env = {k: v for k, v in os.environ.items()
+                 if k not in ("PKT_CORE_BACKEND", "PKT_CORE_DISABLE_RUST")}
+    clean_env["PYTHONPATH"] = str(SRC_DIR)
     proc = subprocess.run(
         [sys.executable, "-c", script],
         capture_output=True,
         text=True,
-        env={**os.environ, "PYTHONPATH": str(SRC_DIR)},
+        env=clean_env,
     )
     assert proc.returncode == 0, proc.stderr
     assert "OK" in proc.stdout

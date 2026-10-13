@@ -88,8 +88,8 @@ jobs:
           python -c "from pkt_core.crypto.ciphers import available_backends, rust_available; print('backends', available_backends()); assert rust_available(), 'Rust backend did not register'"
 
       - name: Cross-backend equivalence (Rust == pure Python)
-        env:
-          PKT_CORE_BACKEND: rust
+        # No PKT_CORE_BACKEND here: the tests pin backends where they need
+        # them, and forcing it globally would break the optionality check.
         run: python -m pytest tests/test_rust_backend.py tests/test_ciphers.py -p no:cacheprovider
 
       - name: Full suite with the accelerator
