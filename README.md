@@ -1,8 +1,9 @@
 # Build Packet Tracer labs — without Packet Tracer
 
 > **Create Packet Tracer `.pkt` labs and scored `.pka` activities entirely offline,
-> with no Packet Tracer installed.**  This repo reverse-engineers the Packet Tracer 9
-> file format and ships a byte-exact codec plus a generator that writes devices,
+> with no Packet Tracer installed.**  This repo reverse-engineers the Packet Tracer
+> file format — both container families, PT 4.1 through 9.0.1 — and ships a byte-exact
+> codec plus a generator that writes devices,
 > modules, cabling, IOS config, PC IPs, instructions, the activity-wizard password,
 > and the scoring tree — straight to a file PT opens.
 
