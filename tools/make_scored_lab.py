@@ -17,7 +17,17 @@ Default topology (or pass --spec JSON):
                  "config":["interface GigabitEthernet0/0"," ip address ..."," no shutdown"],
                  "pc_ip":["192.168.9.10","255.255.255.0","192.168.9.1"],
                  "install":"HWIC-2T"}],
-     "links":[{"a":"R9","aport":"GigabitEthernet0/0","b":"SW9","bport":"GigabitEthernet0/1"}]}
+     "links":[{"a":"R9","aport":"GigabitEthernet0/0","b":"SW9","bport":"GigabitEthernet0/1"}],
+     "instructions":["<h3>Page 1</h3><p>…</p>","<h3>Page 2</h3><p>…</p>"]}
+
+"instructions" is optional and backward compatible: a single HTML string or a
+list of HTML pages (one instruction page per entry).  Without it the
+--instructions string is used as a single page.
+
+Flags:
+  --prune-seed   drop the devices inherited from tools/network_seed.xml from
+                 both the initial and the answer network (default: keep them)
+  --feedback S   overall completion message (default "Lab complete - well done!")
 
 The initial network has the topology with no configs; the answer network has the
 configs.  Scoring is derived from the answer.
@@ -53,8 +63,10 @@ DEFAULT_SPEC = {
 }
 
 
-def build_network(seed, models, modules, spec, path, configured):
+def build_network(seed, models, modules, spec, path, configured, prune_seed=False):
     lab = lab_api.Lab(seed, models, modules)
+    if prune_seed:
+        lab.prune_seed_devices()
     ids = {}
     for d in spec["devices"]:
         ids[d["name"]] = lab.add_device(
@@ -77,6 +89,10 @@ def main():
     ap.add_argument("--instructions",
                     default="<h3>Task</h3><p>Configure the network per the topology.</p>")
     ap.add_argument("--spec", help="JSON topology spec (default: R9-SW9-PC9)")
+    ap.add_argument("--prune-seed", action="store_true",
+                    help="drop the devices inherited from tools/network_seed.xml")
+    ap.add_argument("--feedback", default="Lab complete - well done!",
+                    help="overall completion feedback message")
     a = ap.parse_args()
 
     spec = json.load(open(a.spec)) if a.spec else DEFAULT_SPEC
@@ -84,8 +100,10 @@ def main():
     shapes = scoring.load_shapes(os.path.join(HERE, "device_shapes.json"))
     seed = os.path.join(HERE, "network_seed.xml")
 
-    build_network(seed, models, modules, spec, "/tmp/_pt9_initial.pkt", False)
-    build_network(seed, models, modules, spec, "/tmp/_pt9_answer.pkt", True)
+    build_network(seed, models, modules, spec, "/tmp/_pt9_initial.pkt", False,
+                  prune_seed=a.prune_seed)
+    build_network(seed, models, modules, spec, "/tmp/_pt9_answer.pkt", True,
+                  prune_seed=a.prune_seed)
     initial = pt9.decode("/tmp/_pt9_initial.pkt", "pkt").decode("utf-8")
     answer = pt9.decode("/tmp/_pt9_answer.pkt", "pkt").decode("utf-8")
 
@@ -95,10 +113,19 @@ def main():
     init_sc, comp_sc = scoring.from_shapes(score_spec, shapes)
 
     act = activity.Activity(os.path.join(HERE, "activity_skeleton.xml"))
-    act.set_instructions([a.instructions])
+    # instruction pages: spec["instructions"] may be a single HTML string or a
+    # list of HTML pages; fall back to the --instructions string as one page
+    pages = spec.get("instructions", a.instructions)
+    if isinstance(pages, str):
+        pages = [pages]
+    act.set_instructions(list(pages))
+    # The activity password is the PASS *attribute* of <ACTIVITY> (ACTIVITY/@PASS).
+    # It is NOT <OPTIONS><PASS> -- a different field, left empty here -- so a naive
+    # reader of pkt_core.models.LabOptions.password sees "" while
+    # pkt_core.models.Lab.activity_password (which reads ACTIVITY/@PASS) gets it right.
     act.set_password(a.password)
     act.set_permissions(locked=False, noguest=False, component_list="Ip, Physical, Other")
-    act.set_feedback(incomplete="Keep going.", complete="Lab complete - well done!")
+    act.set_feedback(incomplete="Keep going.", complete=a.feedback)
     act.set_scoring_xml(init_sc, comp_sc)
     act.set_networks(initial_xml=initial, answer_xml=answer)
     act.save(a.out)

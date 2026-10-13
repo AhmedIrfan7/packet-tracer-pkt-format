@@ -66,8 +66,16 @@ class Activity:
         self.xml = re.sub(r"<INSTRUCTIONS\b[^>]*>.*?</INSTRUCTIONS>", new,
                           self.xml, count=1, flags=re.S)
 
-    def set_password(self, password):
-        """Activity-Wizard password (ACTIVITY/@PASS)."""
+    def set_password(self, password: str) -> None:
+        """Activity-Wizard password.
+
+        Written as the PASS *attribute* of the <ACTIVITY> element
+        (ACTIVITY/@PASS), which is where Packet Tracer keeps it.  Do not confuse
+        this with <OPTIONS><PASS>: that is a *different* field and stays empty,
+        so a naive reader such as pkt_core.models.LabOptions.password sees "".
+        pkt_core.models.Lab.activity_password, which reads ACTIVITY/@PASS, gets
+        the real value.
+        """
         self._set_attr("ACTIVITY", "PASS", password)
 
     def set_timer(self, enabled=True, seconds=0):

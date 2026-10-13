@@ -15,6 +15,8 @@ Verified capabilities
 *   pc_ip=(ip,mask,gw)                  NIC <IP>/<SUBNET>/<PORT_GATEWAY>
 * install_module(dev, module, bay=0)    fill an empty <SLOT> with a <MODULE>
 * link(a, aport, b, bport, kind=…)      copper eCopper/eStraightThrough, serial eSerial
+* device_names()                        names in use (seed + added); see Naming below
+* prune_seed_devices()                  drop the devices inherited from the seed
 * save(path)
 
 Physical placement
@@ -26,8 +28,19 @@ are load-critical and were found empirically:
   * the leaf UUID must be **braced** (`{uuid}`) in `<PHYSICAL>`, matching
     `<UUID_STR>`; an unbraced UUID => "corrupted Physical Workspace data".
   * a `<PHYSICAL_CPUR>` element must be present on the device.
-The seed's devices (and their workspace leaves) are removed automatically so no
-orphan leaves remain (orphans also corrupt the workspace).
+The seed's devices can be removed with `prune_seed_devices()` (=
+`drop_initial()`); that also removes their workspace leaves and any links that
+referenced them, so no orphan leaves remain (orphans also corrupt the
+workspace).
+
+Naming
+------
+The seed already contributes devices (SW1, R1, R2, PC-A, PC-B, Server, ...),
+so `add_device()` refuses to reuse an existing device name by default and
+raises ValueError.  Pass `on_name_conflict="suffix"` to auto-rename instead
+(SW1 -> SW1(1)); `device_names()` lists every name currently in use and
+`prune_seed_devices()` (alias `drop_seed_devices`) drops the inherited seed
+devices for a clean workspace.
 
 See docs/CAPABILITIES.md for the full documented model.
 """
@@ -36,6 +49,7 @@ import re
 import copy
 import uuid
 import xml.etree.ElementTree as ET
+from collections.abc import Sequence
 
 import pt9
 
@@ -207,13 +221,47 @@ class Lab:
         return ET.tostring(c, encoding="unicode")
 
     # -- devices ----------------------------------------------------------- #
-    def _next_mac(self):
+    def _next_mac(self) -> str:
         self._mac += 1
         n = self._mac
         return "%04X.%04X.%04X" % (0x0212, (n >> 16) & 0xFFFF, n & 0xFFFF)
 
-    def add_device(self, model, name, x=100, y=100, power=True, ios_config=None,
-                   pc_ip=None, install=None, bay=0):
+    def device_names(self) -> list[str]:
+        """Return the names of every device currently in the lab, in document
+        order.  This includes the devices inherited from the seed network
+        (e.g. SW1, R1, R2, PC-A, PC-B, Server) -- see prune_seed_devices()."""
+        return [d.findtext("ENGINE/NAME") or "" for d in self.devs.findall("DEVICE")]
+
+    def _resolve_name(self, name: str, on_name_conflict: str) -> str:
+        """Resolve `name` against the names already in use.
+
+        on_name_conflict="raise"  -> ValueError on collision (the default; silent
+                                     renaming hides authoring bugs).
+        on_name_conflict="suffix" -> auto-rename: SW1 -> SW1(1) -> SW1(2) ...
+        """
+        if on_name_conflict not in ("raise", "suffix"):
+            raise ValueError("on_name_conflict must be 'raise' or 'suffix', got %r"
+                             % (on_name_conflict,))
+        taken = set(self.device_names())
+        if name not in taken:
+            return name
+        if on_name_conflict == "raise":
+            raise ValueError(
+                "device name %r is already in use (the seed contributes devices "
+                "named SW1, R1, R2, PC-A, PC-B, Server, ...); pick another name, "
+                "call prune_seed_devices() first, or pass on_name_conflict='suffix'"
+                % (name,))
+        n = 1
+        while "%s(%d)" % (name, n) in taken:
+            n += 1
+        return "%s(%d)" % (name, n)
+
+    def add_device(self, model: str, name: str, x: int = 100, y: int = 100,
+                   power: bool = True, ios_config: Sequence[str] | None = None,
+                   pc_ip: Sequence[str] | None = None, install: str | None = None,
+                   bay: int = 0, on_name_conflict: str = "raise") -> str:
+        # unique-name check first: a collision must not leave half-added state
+        name = self._resolve_name(name, on_name_conflict)
         i = self._n
         self._n += 1
         # fresh physical leaf
@@ -440,6 +488,21 @@ class Lab:
                 if cab is not None and (cab.findtext("FROM") in dead or cab.findtext("TO") in dead):
                     links.remove(L)
         self._initial_devs = []
+
+    def prune_seed_devices(self) -> list[str]:
+        """Remove the devices inherited from the seed network, so the lab
+        contains only the devices the author placed.  (`drop_seed_devices` is an
+        alias for the same method.)
+
+        This is `drop_initial()` under an author-facing name: it removes the seed
+        devices, their physical-workspace leaves, and any links that referenced
+        them.  Returns the names of the removed devices.  Safe to call twice
+        (the second call removes nothing)."""
+        names = [el.findtext("ENGINE/NAME") or "" for el in self._initial_devs]
+        self.drop_initial()
+        return names
+
+    drop_seed_devices = prune_seed_devices
 
     def save(self, path):
         pt9.encode(path, ET.tostring(self.base, encoding="unicode").encode("utf-8"), "pkt")

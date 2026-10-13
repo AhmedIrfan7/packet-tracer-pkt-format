@@ -17,7 +17,11 @@ Every router and switch gets a real IOS running configuration (hostnames,
 interface addresses, OSPF adjacencies, VLAN definitions, DHCP pools, serial
 clock rates), and every end device gets an IP.
 
-    python3 tools/build_large_topology.py --out large_campus.pkt [--devices N]
+    python3 tools/build_large_topology.py --out large_campus.pkt [--devices N] [--prune-seed]
+
+Without --prune-seed the devices inherited from tools/network_seed.xml (SW1, R1,
+R2, PC-A, PC-B, Server, Power Distribution Device0) stay in the file; with it
+the output contains only the generated topology.
 
 The output is a genuine Packet Tracer file: it round-trips byte-exactly
 through pkt_core and opens in Packet Tracer 9.0.1.
@@ -152,9 +156,11 @@ def server_config(name: str, domain: str, services: list[str]) -> list[str]:
 # --------------------------------------------------------------------------
 # topology
 # --------------------------------------------------------------------------
-def build(out_path: Path, clients_per_access: int) -> int:
+def build(out_path: Path, clients_per_access: int, prune_seed: bool = False) -> int:
     models, modules = lab_api.load_templates("tools/device_templates.json")
     lab = lab_api.Lab("tools/network_seed.xml", models, modules)
+    if prune_seed:
+        lab.prune_seed_devices()
 
     ids: dict[str, str] = {}
     device_count = 0
@@ -286,8 +292,10 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--out", type=Path, default=Path("large_campus.pkt"))
     ap.add_argument("--clients", type=int, default=2,
                     help="clients per access switch (default 2)")
+    ap.add_argument("--prune-seed", action="store_true",
+                    help="drop the devices inherited from tools/network_seed.xml")
     args = ap.parse_args(argv)
-    n = build(args.out, args.clients)
+    n = build(args.out, args.clients, prune_seed=args.prune_seed)
     print(f"wrote {args.out} with {n} devices")
     return 0
 
