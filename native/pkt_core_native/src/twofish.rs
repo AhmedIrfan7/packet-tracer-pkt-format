@@ -15,8 +15,6 @@
 
 use std::sync::LazyLock;
 
-const M32: u32 = 0xFFFF_FFFF;
-
 /// GF(2^8) multiplication with the given reduction polynomial.
 fn gf_mul(mut left: u8, mut right: u8, poly: u16) -> u8 {
     let mut result: u8 = 0;
@@ -68,7 +66,7 @@ fn build_q(t0: &[u8; 16], t1: &[u8; 16], t2: &[u8; 16], t3: &[u8; 16]) -> [u8; 2
 static Q0: LazyLock<[u8; 256]> = LazyLock::new(|| build_q(&Q0_T0, &Q0_T1, &Q0_T2, &Q0_T3));
 static Q1: LazyLock<[u8; 256]> = LazyLock::new(|| build_q(&Q1_T0, &Q1_T1, &Q1_T2, &Q1_T3));
 
-fn q(table: usize, index: u8) -> u8 {
+fn q(table: u8, index: u8) -> u8 {
     match table {
         0 => Q0[index as usize],
         _ => Q1[index as usize],

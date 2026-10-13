@@ -38,6 +38,10 @@ where = ["src"]
 strict = true
 python_version = "3.10"
 warn_unreachable = true
+# typings/ carries the stub for the optional Rust accelerator module
+# pkt_core_native, so mypy --strict stays clean whether or not the extension
+# is installed in the environment running the check.
+mypy_path = "typings"
 
 [tool.coverage.run]
 branch = true

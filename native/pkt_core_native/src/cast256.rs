@@ -96,7 +96,7 @@ impl Cast256 {
         let mut f = words[5];
         let mut g = words[6];
         let mut h = words[7];
-        let mut octave = |i: usize,
+        let octave = |i: usize,
                           a: &mut u32,
                           b: &mut u32,
                           c: &mut u32,
@@ -160,7 +160,7 @@ impl Cast256 {
         (self.kr, self.km)
     }
 
-    fn quad_round(&self, state: Quad, index: usize, forward: bool) -> Quad {
+    pub fn quad_round(&self, state: Quad, index: usize, forward: bool) -> Quad {
         let [mut a, mut b, mut c, mut d] = state;
         let [kr0, kr1, kr2, kr3] = self.kr[index];
         let [km0, km1, km2, km3] = self.km[index];

@@ -10,6 +10,10 @@ dist/
 .coverage
 htmlcov/
 
+# Rust accelerator build artefacts (native/pkt_core_native); the wheels it
+# produces land in dist/, which is already ignored above.
+native/pkt_core_native/target/
+
 # Packet Tracer sample binaries are deliberately NOT committed.
 # See corpus/README.md — the corpus is reproduced by corpus/fetch_corpus.py,
 # pinned by SHA-256 in corpus/CORPUS_INDEX.tsv.

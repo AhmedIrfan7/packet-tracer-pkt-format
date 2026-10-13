@@ -22,6 +22,6 @@ classifiers = [
 ]
 
 [tool.maturin]
-# One abi3 wheel covers every CPython >= 3.10.
-features = ["abi3-py310"]
+# One abi3 wheel covers every CPython >= 3.10 (the pyo3 dependency already
+# enables the `abi3-py310` feature; nothing extra is needed here).
 module-name = "pkt_core_native"

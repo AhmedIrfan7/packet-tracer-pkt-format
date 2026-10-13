@@ -49,6 +49,40 @@ impl Impl {
             Impl::Cast256(c) => c.encrypt_block(block),
         }
     }
+
+    fn key_size(&self) -> usize {
+        match self {
+            Impl::Twofish(c) => c.key_size(),
+            Impl::Serpent(c) => c.key_size(),
+            Impl::Cast256(c) => c.key_size(),
+        }
+    }
+
+    fn decrypt_block(&self, block: &[u8]) -> Option<[u8; BLOCK_SIZE]> {
+        match self {
+            Impl::Cast256(c) => Some(c.decrypt_block(block)),
+            _ => None,
+        }
+    }
+
+    fn cast256_schedule(&self) -> Option<([[u32; 4]; 12], [[u32; 4]; 12])> {
+        match self {
+            Impl::Cast256(c) => Some(c.schedule()),
+            _ => None,
+        }
+    }
+
+    fn cast256_quad_round(
+        &self,
+        state: [u32; 4],
+        index: usize,
+        forward: bool,
+    ) -> Option<[u32; 4]> {
+        match self {
+            Impl::Cast256(c) => Some(c.quad_round(state, index, forward)),
+            _ => None,
+        }
+    }
 }
 
 /// A keyed block cipher: 16 bytes in, 16 bytes out (ECB, encrypt only).
@@ -59,7 +93,6 @@ impl Impl {
 struct PyCipher {
     inner: Impl,
     name: String,
-    key_size: usize,
 }
 
 fn key_size_error(name: &str, len: usize) -> PyErr {
@@ -94,14 +127,13 @@ impl PyCipher {
             }
             other => {
                 return Err(PyValueError::new_err(format!(
-                    "pkt_core_native has no cipher named {other!r}; known: {NAMES:?}"
+                    "pkt_core_native has no cipher named {other:?}; known: {NAMES:?}"
                 )))
             }
         };
         Ok(Self {
             inner,
             name: name.to_string(),
-            key_size: key.len(),
         })
     }
 }
@@ -122,7 +154,7 @@ impl PyCipher {
     /// Length of the key this instance was constructed with.
     #[getter]
     fn key_size(&self) -> usize {
-        self.key_size
+        self.inner.key_size()
     }
 
     /// The registry name this instance was constructed with.
@@ -160,10 +192,71 @@ impl PyCipher {
         Ok(PyBytes::new(py, &out))
     }
 
+    /// CAST-256 only: the inverse of :meth:`encrypt_block`.
+    ///
+    /// CAST-256 decryption is exactly the encryption structure with the
+    /// quad-round keys reversed (RFC 2612 section 2.3).  Twofish and Serpent
+    /// are encrypt-only in this crate — the container format never decrypts
+    /// with them — so those raise :class:`ValueError`.
+    fn decrypt_block<'py>(&self, py: Python<'py>, block: &[u8]) -> PyResult<Bound<'py, PyBytes>> {
+        if block.len() != BLOCK_SIZE {
+            return Err(PyValueError::new_err(format!(
+                "block must be {BLOCK_SIZE} bytes, got {}",
+                block.len()
+            )));
+        }
+        match self.inner.decrypt_block(block) {
+            Some(out) => Ok(PyBytes::new(py, &out)),
+            None => Err(PyValueError::new_err(
+                "decrypt_block is only implemented for cast256",
+            )),
+        }
+    }
+
+    /// CAST-256 only: the derived quad-round keys ``(kr, km)`` (RFC 2612
+    /// section 2.2), exposed so the appendix-A intermediate values can be
+    /// checked from Python.
+    fn key_schedule(
+        &self,
+    ) -> PyResult<(
+        Vec<(u32, u32, u32, u32)>,
+        Vec<(u32, u32, u32, u32)>,
+    )> {
+        match self.inner.cast256_schedule() {
+            Some((kr, km)) => Ok((
+                kr.iter().map(|q| (q[0], q[1], q[2], q[3])).collect(),
+                km.iter().map(|q| (q[0], q[1], q[2], q[3])).collect(),
+            )),
+            None => Err(PyValueError::new_err(
+                "key_schedule is only implemented for cast256",
+            )),
+        }
+    }
+
+    /// CAST-256 only: one quad-round ``Q_i`` / ``QBAR_i`` of RFC 2612
+    /// section 2.3, exposed so the appendix-A intermediate values can be
+    /// checked from Python (the pure-Python class exposes the same step).
+    #[pyo3(signature = (state, index, forward = true))]
+    fn cast256_quad_round(
+        &self,
+        state: (u32, u32, u32, u32),
+        index: usize,
+        forward: bool,
+    ) -> PyResult<(u32, u32, u32, u32)> {
+        let input = [state.0, state.1, state.2, state.3];
+        match self.inner.cast256_quad_round(input, index, forward) {
+            Some(out) => Ok((out[0], out[1], out[2], out[3])),
+            None => Err(PyValueError::new_err(
+                "cast256_quad_round is only implemented for cast256",
+            )),
+        }
+    }
+
     fn __repr__(&self) -> String {
         format!(
-            "pkt_core_native.Cipher({!r}, key_size={})",
-            self.name, self.key_size
+            "pkt_core_native.Cipher({:?}, key_size={})",
+            self.name,
+            self.inner.key_size()
         )
     }
 }

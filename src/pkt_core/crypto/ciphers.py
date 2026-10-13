@@ -4,17 +4,29 @@ The container needs exactly one primitive from the cipher: *encrypt a 16-byte
 block*. Everything above this module (CMAC, CTR, EAX) is expressed purely in
 terms of that oracle, so the backend is swappable.
 
-Two backends are provided:
+Three backends are provided, tried in this order:
 
-* **libgcrypt** — used first, because it is roughly 100x faster and a container
-  run is CTR + CMAC over the whole payload. A 600 KB file is ~38k blocks.
-* **Pure Python** (:mod:`pkt_core.crypto.ciphers_pure`) — the portable fallback,
-  and the *only* source of CAST-256, which libgcrypt does not implement at all.
+* **Rust** (:mod:`pkt_core_native`, optional) — the fastest path, built from
+  ``native/pkt_core_native/`` with PyO3 + maturin.  Covers Twofish, Serpent and
+  CAST-256.  It is a *pure accelerator*: importing :mod:`pkt_core` works fine
+  when the module is absent, and the probe is lazy.
+* **libgcrypt** — used when it covers the algorithm and Rust is unavailable,
+  because it is roughly 100x faster than Python and a container run is
+  CTR + CMAC over the whole payload (a 600 KB file is ~38k blocks).  It does
+  **not** implement CAST-256.
+* **Pure Python** (:mod:`pkt_core.crypto.ciphers_pure`) — the portable
+  fallback, and the reference implementation every other backend is checked
+  against.
 
-Preference order is therefore libgcrypt when it covers the algorithm, pure
-Python otherwise. The two are cross-checked against each other and against
-published known-answer tests in ``tests/test_ciphers.py``, so the fast path is
-not the unverified one.
+The three are cross-checked against each other and against published
+known-answer tests in ``tests/test_ciphers.py`` and
+``tests/test_rust_backend.py``, so the fast path is not the unverified one.
+
+The backend can be pinned per process with ``PKT_CORE_BACKEND`` — one of
+``auto`` (default), ``rust``, ``gcrypt`` or ``pure`` — and the Rust module can
+be masked out entirely with ``PKT_CORE_DISABLE_RUST=1`` (useful to prove the
+portable path still works).  :func:`get_cipher` also accepts an explicit
+``backend=`` keyword.
 
 .. note::
 
@@ -28,18 +40,26 @@ not the unverified one.
 from __future__ import annotations
 
 import ctypes
-from typing import Callable, Final, Protocol, runtime_checkable
+import os
+from typing import TYPE_CHECKING, Callable, Final, Literal, Protocol, runtime_checkable
 
 from pkt_core.errors import UnsupportedCipherError
 
+if TYPE_CHECKING:  # pragma: no cover - typing only; stub in typings/
+    from pkt_core_native import Cipher as NativeCipher
+
 __all__ = [
     "BLOCK_SIZE",
+    "Backend",
     "BlockCipher",
     "LibgcryptCipher",
     "get_cipher",
     "encrypt_block",
     "available_ciphers",
+    "available_backends",
     "cipher_available",
+    "rust_available",
+    "rust_check",
     "CIPHER_KEY_SIZES",
     # re-exported from the pure-Python backend
     "CIPHERS",
@@ -49,6 +69,10 @@ __all__ = [
     "Serpent",
     "CAST256",
 ]
+
+#: A selectable block-cipher backend.  ``"auto"`` walks the preference order
+#: Rust -> libgcrypt -> pure Python.
+Backend = Literal["auto", "rust", "gcrypt", "pure"]
 
 BLOCK_SIZE: Final[int] = 16
 
@@ -206,6 +230,116 @@ class LibgcryptCipher:
 
 
 # --------------------------------------------------------------------------
+# Rust accelerator backend (optional)
+# --------------------------------------------------------------------------
+# ``pkt_core_native`` is a PyO3 extension built from native/pkt_core_native/.
+# It is *optional*: probing is lazy (nothing happens at import time), a missing
+# module is a silent fall-through to the next backend, and
+# PKT_CORE_DISABLE_RUST=1 masks it even when it is installed.
+_NATIVE_NAMES: Final[tuple[str, ...]] = (
+    "twofish",
+    "serpent128",
+    "serpent192",
+    "serpent256",
+    "cast256",
+)
+
+_RUST_PROBED: bool = False
+_RUST_CIPHER_CLS: Callable[..., NativeCipher] | None = None
+
+
+def _rust_cipher_class() -> Callable[..., NativeCipher] | None:
+    """Lazily probe for the Rust accelerator's ``Cipher`` class.
+
+    Returns ``None`` when the module is absent, unusable or masked out; the
+    result (including failure) is cached, because this sits on the hot path.
+    """
+    global _RUST_PROBED, _RUST_CIPHER_CLS
+    if _RUST_PROBED:
+        return _RUST_CIPHER_CLS
+    _RUST_PROBED = True
+    if os.environ.get("PKT_CORE_DISABLE_RUST"):
+        return None
+    try:
+        import pkt_core_native  # typed by typings/pkt_core_native.pyi
+    except Exception:  # pragma: no cover - absent or broken extension
+        return None
+    cipher_cls: Callable[..., NativeCipher] | None = getattr(pkt_core_native, "Cipher", None)
+    if cipher_cls is None:  # pragma: no cover - malformed extension
+        return None
+    _RUST_CIPHER_CLS = cipher_cls
+    return cipher_cls
+
+
+def _reset_rust_probe() -> None:
+    """Forget the cached probe result (used by tests that toggle the module)."""
+    global _RUST_PROBED, _RUST_CIPHER_CLS
+    _RUST_PROBED = False
+    _RUST_CIPHER_CLS = None
+
+
+def rust_available() -> bool:
+    """Whether the Rust accelerator module is importable and not disabled."""
+    return _rust_cipher_class() is not None
+
+
+def rust_check() -> dict[str, str] | None:
+    """Self-check the accelerator against known-answer vectors.
+
+    Returns ``None`` when the accelerator is unavailable, otherwise a mapping
+    with the module ``version`` and one entry per cipher whose KAT passes
+    (``"ok"``) — a cheap way to prove the fast path is the verified one.
+    """
+    if not rust_available():
+        return None
+    try:
+        import pkt_core_native
+    except Exception:  # pragma: no cover - probed a moment ago
+        return None
+    vectors: Final[dict[str, tuple[str, str, str]]] = {
+        # name: (key, plaintext, ciphertext) from the published KATs
+        "twofish": (
+            "00" * 16,
+            "00" * 16,
+            "9F589F5CF6122C32B6BFEC2F2AE8C35A",
+        ),
+        "serpent128": (
+            "80" + "00" * 15,
+            "00" * 16,
+            "264E5481EFF42A4606ABDA06C0BFDA3D",
+        ),
+        "cast256": (
+            "2342bb9efa38542c0af75647f29f615d",
+            "00" * 16,
+            "c842a08972b43d20836c91d1b7530f6b",
+        ),
+    }
+    report: dict[str, str] = {
+        "version": str(getattr(pkt_core_native, "__version__", "unknown")),
+    }
+    for name, (key, pt, ct) in vectors.items():
+        got = pkt_core_native.Cipher(name, bytes.fromhex(key)).encrypt_block(
+            bytes.fromhex(pt)
+        )
+        report[name] = "ok" if got == bytes.fromhex(ct) else "MISMATCH"
+    return report
+
+
+def _rust_cipher(name: str, key: bytes) -> BlockCipher | None:
+    """Return a Rust-backed cipher, or ``None`` if that path is unavailable."""
+    if name not in _NATIVE_NAMES:
+        return None
+    cipher_cls = _rust_cipher_class()
+    if cipher_cls is None:
+        return None
+    try:
+        cipher: BlockCipher = cipher_cls(name, key)
+    except (ValueError, TypeError):  # pragma: no cover - validated by caller
+        return None
+    return cipher
+
+
+# --------------------------------------------------------------------------
 # Pure-Python backend
 # --------------------------------------------------------------------------
 # --------------------------------------------------------------------------
@@ -235,46 +369,95 @@ def _pure_cipher(name: str, key: bytes) -> BlockCipher | None:
     return registry[name](key)
 
 
-def get_cipher(name: str, key: bytes) -> BlockCipher:
+def _gcrypt_cipher(name: str, key: bytes) -> BlockCipher | None:
+    """Return a libgcrypt-backed cipher, or ``None`` if unavailable."""
+    if name not in _GCRY_NAMES:
+        return None
+    try:
+        return LibgcryptCipher(name, key)
+    except UnsupportedCipherError:
+        return None
+
+
+def get_cipher(
+    name: str,
+    key: bytes,
+    backend: Backend | None = None,
+) -> BlockCipher:
     """Construct the named block cipher.
 
-    Preference order: ``libgcrypt`` where it covers the algorithm (fast), then
-    pure Python (portable, and the only source of CAST-256).
+    Preference order: the **Rust** accelerator where it covers the algorithm,
+    then **libgcrypt** where it covers it, then **pure Python** (portable, and
+    the reference the other two are proven equal to).
 
     Args:
         name: ``"twofish"``, ``"serpent128"``, ``"serpent256"``, ``"cast256"``…
         key: 16/24/32-byte key.
+        backend: Pin a specific backend — ``"rust"``, ``"gcrypt"`` or
+            ``"pure"`` — instead of the ``"auto"`` preference order.  When
+            ``None`` (default) the ``PKT_CORE_BACKEND`` environment variable is
+            consulted, then ``"auto"``.
 
     Raises:
         UnsupportedCipherError: if no backend can provide the cipher.
-        ValueError: if the key length is wrong for that cipher.
+        ValueError: if the key length is wrong for that cipher, or ``backend``
+            is not a recognised name.
     """
     if name not in CIPHER_KEY_SIZES:
         raise UnsupportedCipherError(f"unknown cipher {name!r}")
     if len(key) not in CIPHER_KEY_SIZES[name]:
         raise ValueError(f"{name} does not accept a {len(key)}-byte key")
 
-    # Native first: this is on the hot path for every container operation and
-    # the two backends are proven byte-identical in tests/test_ciphers.py.
-    if name in _GCRY_NAMES:
-        try:
-            return LibgcryptCipher(name, key)
-        except UnsupportedCipherError:
-            pass  # fall through to the pure implementation
+    choice: Backend | str = backend or os.environ.get("PKT_CORE_BACKEND") or "auto"
+    if choice not in ("auto", "rust", "gcrypt", "pure"):
+        raise ValueError(
+            f"unknown backend {choice!r}; expected auto, rust, gcrypt or pure"
+        )
 
-    impl = _pure_cipher(name, key)
-    if impl is not None:
-        return impl
+    # Accelerators first: this is on the hot path for every container
+    # operation and the backends are proven byte-identical in the test suite.
+    candidates: list[Callable[[str, bytes], BlockCipher | None]] = []
+    if choice == "auto":
+        candidates = [_rust_cipher, _gcrypt_cipher, _pure_cipher]
+    elif choice == "rust":
+        candidates = [_rust_cipher]
+    elif choice == "gcrypt":
+        candidates = [_gcrypt_cipher]
+    else:
+        candidates = [_pure_cipher]
 
+    for make in candidates:
+        impl = make(name, key)
+        if impl is not None:
+            return impl
+
+    wanted = f"backend {choice!r} cannot provide" if choice != "auto" else "no backend can provide"
     raise UnsupportedCipherError(
-        f"cipher {name!r} needs a backend: libgcrypt has no {name!r} and no "
-        "pure-Python implementation is registered"
+        f"{wanted} cipher {name!r}: libgcrypt has no {name!r}, the Rust "
+        "accelerator does not cover it or is not installed, and no pure-Python "
+        "implementation is registered"
     )
 
 
 def encrypt_block(name: str, key: bytes, block: bytes) -> bytes:
     """One-shot convenience: encrypt a single block."""
     return get_cipher(name, key).encrypt_block(block)
+
+
+def available_backends() -> list[str]:
+    """Names of the backends this build can actually use.
+
+    Always contains ``"pure"`` (it is in-tree); the others depend on the host —
+    ``"rust"`` when ``pkt_core_native`` is installed and not disabled,
+    ``"gcrypt"`` when ``libgcrypt`` loads.
+    """
+    backends: list[str] = []
+    if rust_available():
+        backends.append("rust")
+    if _libgcrypt() is not None:
+        backends.append("gcrypt")
+    backends.append("pure")
+    return backends
 
 
 def cipher_available(name: str) -> bool:
