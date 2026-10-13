@@ -5,7 +5,7 @@
 > 以及一个生成器——可直接写出设备、模块、连线、IOS 配置、PC IP、实验说明、
 > 活动向导密码与评分树，产出 Packet Tracer 能直接打开的文件。
 
-[![License: GPL-3.0-or-later](https://img.shields.io/badge/license-GPLv3-blue.svg)](LICENSE)
+[![License: GPL v3](https://img.shields.io/badge/license-GPLv3-blue.svg)](LICENSE)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/)
 [![No Packet Tracer needed](https://img.shields.io/badge/Packet_Tracer-not_required-32d74b.svg)](#快速上手)
 [![Ko-fi](https://img.shields.io/badge/Ko--fi-Support%20me-ff5e5b?logo=kofi&logoColor=white)](https://ko-fi.com/suoim)
@@ -169,12 +169,10 @@ Rust 比 libgcrypt 快约 9 倍，比纯 Python 快 90–315 倍。三种后端�
 
 ## 许可证
 
-**GNU General Public License v3.0 or later** — 见 [LICENSE](LICENSE)。
+**GNU General Public License v3.0 或更高版本** — 见 [LICENSE](LICENSE)。
 
 非商业用途免费。如需商业使用，请开 issue 联系商谈商业授权。
 
-> 这里**有意不使用** Creative Commons 许可证：CC 官方建议不要将 CC 许可证用于软件。
-> GPL-3.0-or-later 专为代码而写，对"非商业"的界定是明确的。
 
 ---
 

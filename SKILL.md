@@ -234,4 +234,4 @@ Corpus: `corpus/CORPUS_INDEX.tsv` (SHA-256 manifest), `corpus/fetch_corpus.py`
 
 ## License
 
-GNU General Public License v3.0 or later. Free for non-commercial use.
+GNU General Public License v3.0 or later.
