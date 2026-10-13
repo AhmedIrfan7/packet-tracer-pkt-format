@@ -25,7 +25,9 @@ $ git clone https://github.com/aacanadaa/packet-tracer-pkt-format.git
 $ cd packet-tracer-pkt-format
 $ python3 -m venv .venv && . .venv/bin/activate
 $ pip install -e . pytest hypothesis pydantic
-$ python -m pytest tests/ -q            # expect: 293 passed, 1 skipped
+$ python -m pytest tests/ -q            # expect 245 passed, 49 skipped
+                                        #   (the 49 are the optional Rust tests;
+                                        #    with pkt_core_native: 293 passed, 1 skipped)
 ```
 
 Optional but faster: `pip install pkt_core_native` gives the Rust cipher
