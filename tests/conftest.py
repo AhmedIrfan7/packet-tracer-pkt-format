@@ -5,15 +5,17 @@
 
 ``test_audit``, ``test_layout`` and ``test_power`` regression-test the two
 JASDF-AEWC builds (enterprise, 290 devices; standard, 199 devices).  They used
-to read them from a directory on the maintainer's machine, so everywhere else
--- CI included -- they skipped.  The vendored generator rebuilds both files
-byte-for-byte (the hashes are pinned in ``generators/jasdf_aewc/build/``), so
-by default they are built once per session into a temporary directory.
+to read them from a directory on the maintainer's machine, so in CI (and
+anywhere else without that directory) they skipped.  The vendored generator
+rebuilds both files byte-for-byte, so by default they are built once per
+session into a temporary directory, and each build must match the SHA-256
+pinned in ``generators/jasdf_aewc/build/final_sha256*.txt``.
 
 Set ``ARTEFACT_DIR`` to test existing copies instead, e.g. the delivered files.
 """
 from __future__ import annotations
 
+import hashlib
 import os
 import subprocess
 import sys
@@ -24,11 +26,12 @@ import pytest
 
 REPO = Path(__file__).resolve().parent.parent
 GENERATOR = REPO / "generators" / "jasdf_aewc" / "build_jasdf_aewc.py"
+PINS = REPO / "generators" / "jasdf_aewc" / "build"
 
-# artefact file name -> generator profile
+# artefact file name -> (generator profile, file pinning its SHA-256)
 PROFILES = {
-    "JASDF_AEWC_JADGE.pkt": "enterprise",
-    "JASDF_AEWC_JADGE_standard.pkt": "standard",
+    "JASDF_AEWC_JADGE.pkt": ("enterprise", "final_sha256.txt"),
+    "JASDF_AEWC_JADGE_standard.pkt": ("standard", "final_sha256_standard.txt"),
 }
 
 
@@ -41,8 +44,12 @@ def jasdf_artefact_dir(tmp_path_factory: pytest.TempPathFactory) -> Path:
     if not GENERATOR.exists():
         pytest.skip("vendored JASDF generator not available")
     out_dir = tmp_path_factory.mktemp("jasdf_artefacts")
-    env = dict(os.environ, PKT_TOOLKIT=str(REPO))
-    for name, profile in PROFILES.items():
+    # build with this checkout's pkt_core, not whichever one is installed
+    pythonpath = os.pathsep.join(
+        p for p in (str(REPO / "src"), os.environ.get("PYTHONPATH")) if p
+    )
+    env = dict(os.environ, PKT_TOOLKIT=str(REPO), PYTHONPATH=pythonpath)
+    for name, (profile, pin) in PROFILES.items():
         out = out_dir / name
         # --report/--inventory default to tracked files under generators/,
         # so point them into the temp directory to keep the checkout clean
@@ -52,7 +59,16 @@ def jasdf_artefact_dir(tmp_path_factory: pytest.TempPathFactory) -> Path:
              "--inventory", str(out.with_suffix(".csv"))],
             capture_output=True, text=True, env=env, timeout=600,
         )
-        assert proc.returncode == 0, proc.stderr + proc.stdout
+        # pytest.fail, not assert: it still fires under `python -O`
+        if proc.returncode != 0:
+            pytest.fail(f"generator failed for profile {profile!r}:\n"
+                        f"{proc.stderr}{proc.stdout}", pytrace=False)
+        digest = hashlib.sha256(out.read_bytes()).hexdigest()
+        # sha256sum format: "<digest>  out/<name>"
+        pinned = (PINS / pin).read_text().split()[0]
+        if digest != pinned:
+            pytest.fail(f"{name}: built {digest}, pinned {pinned} "
+                        f"(generators/jasdf_aewc/build/{pin})", pytrace=False)
     return out_dir
 
 
