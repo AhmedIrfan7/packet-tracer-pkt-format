@@ -24,11 +24,11 @@ REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO))
 TOOLS = REPO / "tools"
 
-# delivered artefacts live outside the repo; the migration tool is run against
-# them by the maintainer, so tests operate on copies in tmp_path
-ARTEFACTS = Path("/home/saoria/filedrop/uploads")
-JADGE = ARTEFACTS / "JASDF_AEWC_JADGE.pkt"
-JADGE_STD = ARTEFACTS / "JASDF_AEWC_JADGE_standard.pkt"
+# the enterprise artefacts, by file name; the jasdf_artefact fixture
+# (conftest.py) resolves them.  The migration tool is run against them by the
+# maintainer, so tests operate on copies in tmp_path
+JADGE = "JASDF_AEWC_JADGE.pkt"
+JADGE_STD = "JASDF_AEWC_JADGE_standard.pkt"
 
 
 def _load(name: str, path: Path):
@@ -273,20 +273,16 @@ def test_repack_cli(tmp_path, templates):
 # --------------------------------------------------------------------------- #
 # delivered enterprise artefacts: migrate a COPY and verify the result
 # --------------------------------------------------------------------------- #
-needs_artefacts = pytest.mark.skipif(
-    not (JADGE.exists() and JADGE_STD.exists()),
-    reason="delivered .pkt artefacts not available")
-
-
-@needs_artefacts
-@pytest.mark.parametrize("src,engine_power,ports", [
+@pytest.mark.parametrize("name,engine_power,ports", [
     (JADGE, 290, 2454),
     (JADGE_STD, 199, 1721),
 ])
-def test_enterprise_artefact_after_repack(tmp_path, src, engine_power, ports):
+def test_enterprise_artefact_after_repack(tmp_path, jasdf_artefact, name,
+                                          engine_power, ports):
     """Repack a copy of the shipped artefact and assert the contract:
     zero pairs <= 40, zero below the floor, no label-box overlaps, inside the
     3900x3900 page -- and the power fix survives byte-for-byte."""
+    src = jasdf_artefact(name)
     copy = tmp_path / src.name
     shutil.copyfile(src, copy)
     out = tmp_path / ("repacked-" + src.name)
@@ -316,10 +312,9 @@ def test_enterprise_artefact_after_repack(tmp_path, src, engine_power, ports):
     assert 0 <= b["y_min"] and b["y_max"] <= 3900
 
 
-@needs_artefacts
-def test_enterprise_artefact_nn_min_positive():
+def test_enterprise_artefact_nn_min_positive(jasdf_artefact):
     """The NN aggregation must never invent a coincident pair."""
-    for src in (JADGE, JADGE_STD):
+    for src in (jasdf_artefact(JADGE), jasdf_artefact(JADGE_STD)):
         xml = lab_api.decode_bytes(src.read_bytes(), "pkt").xml.decode("utf-8")
         rep = check_layout.analyse(lab_api.parse_devices(xml))
         if rep["coincident"] == 0:

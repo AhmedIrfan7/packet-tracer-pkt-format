@@ -21,6 +21,7 @@ import json
 import os
 import subprocess
 import sys
+from collections.abc import Callable
 from pathlib import Path
 from xml.etree.ElementTree import Element as ETElement
 from xml.etree.ElementTree import fromstring as et_fromstring
@@ -57,12 +58,9 @@ from pkt_core.models.services import (
 REPO = Path(__file__).resolve().parent.parent
 TEMPLATES_JSON = REPO / "tools" / "device_templates.json"
 GENERATOR = REPO / "generators" / "jasdf_aewc" / "build_jasdf_aewc.py"
-REAL_ARTEFACT = Path("/home/saoria/filedrop/uploads/JASDF_AEWC_JADGE.pkt")
+# resolved by the jasdf_artefact fixture (conftest.py)
+REAL_ARTEFACT = "JASDF_AEWC_JADGE.pkt"
 
-needs_real = pytest.mark.skipif(
-    not REAL_ARTEFACT.exists(),
-    reason="shipped enterprise artefact not available",
-)
 needs_generator = pytest.mark.skipif(
     not GENERATOR.exists(),
     reason="vendored JASDF generator not available",
@@ -480,8 +478,9 @@ def test_typed_service_views_expose_identities() -> None:
 # --------------------------------------------------------------------------- #
 # 3. regression: the shipped enterprise artefact
 # --------------------------------------------------------------------------- #
-@needs_real
-def test_real_artefact_service_counts_are_the_measured_truth() -> None:
+def test_real_artefact_service_counts_are_the_measured_truth(
+    jasdf_artefact: Callable[[str], Path],
+) -> None:
     """The shipped artefact carries the *repaired* counts.
 
     Problems #1/#2 were 202 AAA clients of which only 140 were distinct, and 259
@@ -496,7 +495,8 @@ def test_real_artefact_service_counts_are_the_measured_truth() -> None:
     rather than a regression -- the defect behaviour is pinned by the synthetic
     fixtures above instead.
     """
-    lab = Lab.from_bytes(decode_bytes(REAL_ARTEFACT.read_bytes(), "pkt").xml)
+    real = jasdf_artefact(REAL_ARTEFACT)
+    lab = Lab.from_bytes(decode_bytes(real.read_bytes(), "pkt").xml)
     leftovers = TemplateLeftovers.from_device_templates_json(TEMPLATES_JSON)
     inv = inventory(lab, leftovers=leftovers)
 
@@ -533,8 +533,9 @@ def test_real_artefact_service_counts_are_the_measured_truth() -> None:
     assert inv.config_lines.blocks == 205
 
 
-@needs_real
-def test_real_artefact_validator_passes_and_catches_a_synthetic_duplicate() -> None:
+def test_real_artefact_validator_passes_and_catches_a_synthetic_duplicate(
+    jasdf_artefact: Callable[[str], Path],
+) -> None:
     """The shipped artefact is clean, and the validator still bites.
 
     The validator's job is to *fail* on duplicates, so it must be shown doing so
@@ -543,14 +544,15 @@ def test_real_artefact_validator_passes_and_catches_a_synthetic_duplicate() -> N
     So: assert the real file passes, and prove the detector works against a
     deliberately corrupted copy of it.
     """
-    lab = Lab.from_bytes(decode_bytes(REAL_ARTEFACT.read_bytes(), "pkt").xml)
+    real = jasdf_artefact(REAL_ARTEFACT)
+    lab = Lab.from_bytes(decode_bytes(real.read_bytes(), "pkt").xml)
     leftovers = TemplateLeftovers.from_device_templates_json(TEMPLATES_JSON)
     report = validate_lab(lab, leftovers=leftovers)
     assert report.ok, [f.message for f in report.findings]
     assert not report.findings
 
     # corrupt a copy: duplicate one device's first AAA client record
-    doc = decode_bytes(REAL_ARTEFACT.read_bytes(), "pkt").xml
+    doc = decode_bytes(real.read_bytes(), "pkt").xml
     marker = b"<CLIENT>"
     at = doc.index(marker)
     end = doc.index(b"</CLIENT>", at) + len(b"</CLIENT>")
@@ -562,12 +564,14 @@ def test_real_artefact_validator_passes_and_catches_a_synthetic_duplicate() -> N
     assert {"duplicate-aaa-client"} <= codes or {"template-leftovers"} <= codes
 
 
-@needs_real
-def test_real_artefact_needs_no_sanitising() -> None:
+def test_real_artefact_needs_no_sanitising(
+    jasdf_artefact: Callable[[str], Path],
+) -> None:
     """Sanitising the shipped artefact must be a no-op: the generator already
     stripped the template residue, so anything left to remove would mean the
     build regressed."""
-    lab = Lab.from_bytes(decode_bytes(REAL_ARTEFACT.read_bytes(), "pkt").xml)
+    real = jasdf_artefact(REAL_ARTEFACT)
+    lab = Lab.from_bytes(decode_bytes(real.read_bytes(), "pkt").xml)
     leftovers = TemplateLeftovers.from_device_templates_json(TEMPLATES_JSON)
     report = sanitize_template_leftovers(lab, leftovers=leftovers)
     assert report.total == 0, report.as_dict()

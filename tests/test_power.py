@@ -28,7 +28,6 @@ cannot recur.
 from __future__ import annotations
 
 import importlib.util
-import os
 import re
 import sys
 import xml.etree.ElementTree as ET
@@ -40,10 +39,6 @@ REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO))  # pt9 (same convention as tests/test_pt9.py)
 sys.path.insert(0, str(REPO / "src"))
 TOOLS = REPO / "tools"
-
-# where the delivered enterprise artefacts live (outside the repo); override
-# with ARTEFACT_DIR when they move
-ARTEFACT_DIR = Path(os.environ.get("ARTEFACT_DIR", "/home/saoria/filedrop/uploads"))
 
 from pkt_core import decode  # noqa: E402
 from pkt_core.models import Lab  # noqa: E402
@@ -286,24 +281,17 @@ def test_powered_reads_absent_as_off(power_lab: Lab) -> None:
 
 
 # --------------------------------------------------------------------------- #
-# shipped enterprise artefacts
+# shipped enterprise artefacts (the jasdf_artefact fixture is in conftest.py)
 # --------------------------------------------------------------------------- #
-def _artefact(name: str) -> Path:
-    path = ARTEFACT_DIR / name
-    if not path.is_file():
-        pytest.skip(f"artefact not present: {path}")
-    return path
-
-
 def _off_devices(path: Path) -> list[tuple[str, str]]:
     lab = Lab.from_bytes(decode(path).xml)
     return [(d.name, d.power_state) for d in lab.devices if d.power_state != "true"]
 
 
-def test_enterprise_artefact_has_no_unpowered_device():
+def test_enterprise_artefact_has_no_unpowered_device(jasdf_artefact):
     """After the fix, every one of the 290 devices (the 10 aggregation
     switches included) must be POWER=true."""
-    path = _artefact("JASDF_AEWC_JADGE.pkt")
+    path = jasdf_artefact("JASDF_AEWC_JADGE.pkt")
     lab = Lab.from_bytes(decode(path).xml)
     assert len(lab.devices) == 290
     off = [(d.name, d.power_state) for d in lab.devices if d.power_state != "true"]
@@ -317,19 +305,19 @@ def test_enterprise_artefact_has_no_unpowered_device():
         assert agg[name] == "true", name
 
 
-def test_standard_artefact_has_no_unpowered_device():
-    path = _artefact("JASDF_AEWC_JADGE_standard.pkt")
+def test_standard_artefact_has_no_unpowered_device(jasdf_artefact):
+    path = jasdf_artefact("JASDF_AEWC_JADGE_standard.pkt")
     assert _off_devices(path) == []
     lab = Lab.from_bytes(decode(path).xml)
     assert len(lab.devices) == 199
     assert all(d.power_state == "true" for d in lab.devices)
 
 
-def test_enterprise_artefact_port_power_untouched():
+def test_enterprise_artefact_port_power_untouched(jasdf_artefact):
     """The device-level fix must not have blanket-set <PORT><POWER>: the
     enterprise model's ports keep their recorded per-port state (all cabled
     ports raised by power_cabled_ports(); unused ports are not our business)."""
-    path = _artefact("JASDF_AEWC_JADGE.pkt")
+    path = jasdf_artefact("JASDF_AEWC_JADGE.pkt")
     lab = Lab.from_bytes(decode(path).xml)
     states: list[str] = []
     for dev in lab.devices:
