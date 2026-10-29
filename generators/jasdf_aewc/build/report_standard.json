@@ -45,6 +45,6 @@
  "devices_switched_on_by_repair": 0,
  "devices_with_power_true": 199,
  "output": "out/JASDF_AEWC_JADGE_standard.pkt",
- "size_bytes": 843321,
- "sha256": "b7857876ca4b01c1cb686dde3ec4df75a4e066f5f3b505da9c38ba96ceceef6f"
+ "size_bytes": 842879,
+ "sha256": "055273628ebb56bb7ac19e8b515fee25f568b0397b2b0c6d95b9d5c2a14755da"
 }

@@ -44,6 +44,6 @@
  "devices_switched_on_by_repair": 0,
  "devices_with_power_true": 134,
  "output": "out/JASDF_AEWC_JADGE_smoke.pkt",
- "size_bytes": 618311,
- "sha256": "38e898562dc1cff0e10dcffdb5526fdbb862d3174926752e59be6341e2d82e20"
+ "size_bytes": 617915,
+ "sha256": "c6d23afee826f9cc955d998065bbb9dc6fac4a3a2350d20c14a45b66f1e9958e"
 }
